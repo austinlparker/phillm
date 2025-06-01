@@ -1,0 +1,10 @@
+{
+  "mcpServers": {
+    "honeycomb": {
+      "url": "https://mcp.honeycomb.io/sse",
+      "headers": {
+        "Authorization": "Bearer YOUR_HONEYCOMB_MCP_KEY_HERE"
+      }
+    }
+  }
+}

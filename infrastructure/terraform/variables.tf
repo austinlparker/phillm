@@ -37,7 +37,7 @@ variable "fargate_memory" {
 variable "app_count" {
   description = "Number of app instances to run"
   type        = number
-  default     = 2
+  default     = 1
 }
 
 variable "log_retention_days" {
@@ -86,5 +86,37 @@ variable "redis_url" {
   description = "Redis connection URL"
   type        = string
   sensitive   = true
+  default     = ""
+}
+
+# Redis ECS configuration
+variable "redis_cpu" {
+  description = "CPU units for Redis container (1 vCPU = 1024 CPU units)"
+  type        = string
+  default     = "256"
+}
+
+variable "redis_memory" {
+  description = "Memory for Redis container (in MiB)"
+  type        = string
+  default     = "512"
+}
+
+variable "redis_password" {
+  description = "Redis password for authentication"
+  type        = string
+  sensitive   = true
+  default     = ""
+}
+
+variable "target_user_id" {
+  description = "Target user ID for PhiLLM scraping"
+  type        = string
+  default     = ""
+}
+
+variable "scrape_channels" {
+  description = "Comma-separated list of channels for PhiLLM scraping"
+  type        = string
   default     = ""
 }

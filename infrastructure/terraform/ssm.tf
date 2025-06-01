@@ -77,7 +77,54 @@ resource "aws_ssm_parameter" "honeycomb_api_key" {
 resource "aws_ssm_parameter" "redis_url" {
   name  = "/${var.project_name}/redis_url"
   type  = "SecureString"
-  value = var.redis_url != "" ? var.redis_url : "redis://localhost:6379"
+  value = var.redis_url != "" ? var.redis_url : "redis://:${aws_ssm_parameter.redis_password.value}@redis.${var.project_name}.local:6379"
+
+  tags = {
+    Environment = var.environment
+    Application = var.project_name
+  }
+
+  depends_on = [aws_service_discovery_service.redis, aws_ssm_parameter.redis_password]
+
+  lifecycle {
+    ignore_changes = [value]
+  }
+}
+
+resource "aws_ssm_parameter" "redis_password" {
+  name  = "/${var.project_name}/redis_password"
+  type  = "SecureString"
+  value = var.redis_password != "" ? var.redis_password : "REPLACE_ME_WITH_SECURE_PASSWORD"
+
+  tags = {
+    Environment = var.environment
+    Application = var.project_name
+  }
+
+  lifecycle {
+    ignore_changes = [value]
+  }
+}
+
+resource "aws_ssm_parameter" "target_user_id" {
+  name  = "/${var.project_name}/target_user_id"
+  type  = "String"
+  value = var.target_user_id != "" ? var.target_user_id : "REPLACE_ME"
+
+  tags = {
+    Environment = var.environment
+    Application = var.project_name
+  }
+
+  lifecycle {
+    ignore_changes = [value]
+  }
+}
+
+resource "aws_ssm_parameter" "scrape_channels" {
+  name  = "/${var.project_name}/scrape_channels"
+  type  = "String"
+  value = var.scrape_channels != "" ? var.scrape_channels : "REPLACE_ME"
 
   tags = {
     Environment = var.environment

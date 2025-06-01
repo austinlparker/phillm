@@ -3,15 +3,15 @@ terraform {
   required_providers {
     aws = {
       source  = "hashicorp/aws"
-      version = "~> 5.0"
+      version = "~> 5.99" # Latest stable version as of Dec 2024
     }
   }
 
   backend "s3" {
     # Configure this with your own S3 bucket for Terraform state
-    # bucket = "your-terraform-state-bucket"
-    # key    = "phillm/terraform.tfstate"
-    # region = "us-east-1"
+    bucket = "your-phillm-terraform-state-bucket"
+    key    = "phillm/terraform.tfstate"
+    region = "us-east-1"
   }
 }
 
@@ -164,6 +164,31 @@ resource "aws_security_group" "ecs_tasks" {
   }
 }
 
+resource "aws_security_group" "redis" {
+  name        = "${var.project_name}-redis"
+  description = "Security group for Redis ECS tasks"
+  vpc_id      = aws_vpc.main.id
+
+  ingress {
+    from_port       = 6379
+    to_port         = 6379
+    protocol        = "tcp"
+    security_groups = [aws_security_group.ecs_tasks.id]
+  }
+
+  egress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  tags = {
+    Name        = "${var.project_name}-redis"
+    Environment = var.environment
+  }
+}
+
 resource "aws_security_group" "alb" {
   name        = "${var.project_name}-alb"
   description = "Security group for Application Load Balancer"
@@ -203,6 +228,181 @@ resource "aws_ecr_repository" "phillm" {
 
   image_scanning_configuration {
     scan_on_push = true
+  }
+
+  tags = {
+    Environment = var.environment
+  }
+}
+
+# EFS for Redis persistence
+resource "aws_efs_file_system" "redis" {
+  creation_token = "${var.project_name}-redis-data"
+  encrypted      = true
+
+  performance_mode = "generalPurpose"
+  throughput_mode  = "provisioned"
+  provisioned_throughput_in_mibps = 10
+
+  tags = {
+    Name        = "${var.project_name}-redis-efs"
+    Environment = var.environment
+  }
+}
+
+resource "aws_efs_mount_target" "redis" {
+  count = length(aws_subnet.private)
+
+  file_system_id  = aws_efs_file_system.redis.id
+  subnet_id       = aws_subnet.private[count.index].id
+  security_groups = [aws_security_group.efs.id]
+}
+
+resource "aws_security_group" "efs" {
+  name        = "${var.project_name}-efs"
+  description = "Security group for EFS"
+  vpc_id      = aws_vpc.main.id
+
+  ingress {
+    from_port       = 2049
+    to_port         = 2049
+    protocol        = "tcp"
+    security_groups = [aws_security_group.redis.id]
+  }
+
+  tags = {
+    Name        = "${var.project_name}-efs"
+    Environment = var.environment
+  }
+}
+
+# Redis ECS Task Definition
+resource "aws_ecs_task_definition" "redis" {
+  family                   = "${var.project_name}-redis"
+  network_mode             = "awsvpc"
+  requires_compatibilities = ["FARGATE"]
+  cpu                      = var.redis_cpu
+  memory                   = var.redis_memory
+
+  execution_role_arn = aws_iam_role.ecs_execution_role.arn
+  task_role_arn      = aws_iam_role.ecs_task_role.arn
+
+  container_definitions = jsonencode([
+    {
+      name  = "redis"
+      image = "public.ecr.aws/docker/library/redis:8.0.2-alpine"
+
+      portMappings = [
+        {
+          containerPort = 6379
+          hostPort      = 6379
+        }
+      ]
+
+      command = [
+        "redis-server",
+        "--requirepass", var.redis_password,
+        "--appendonly", "yes",
+        "--appendfsync", "everysec",
+        "--dir", "/data",
+        "--save", "900 1",
+        "--save", "300 10",
+        "--save", "60 10000"
+      ]
+
+      mountPoints = [
+        {
+          sourceVolume  = "redis-data"
+          containerPath = "/data"
+          readOnly      = false
+        }
+      ]
+
+      logConfiguration = {
+        logDriver = "awslogs"
+        options = {
+          awslogs-group         = aws_cloudwatch_log_group.redis.name
+          awslogs-region        = var.aws_region
+          awslogs-stream-prefix = "ecs"
+        }
+      }
+
+      essential = true
+
+      healthCheck = {
+        command = [
+          "CMD-SHELL",
+          "redis-cli --raw incr ping || exit 1"
+        ]
+        interval    = 30
+        timeout     = 5
+        retries     = 3
+        startPeriod = 60
+      }
+    }
+  ])
+
+  volume {
+    name = "redis-data"
+
+    efs_volume_configuration {
+      file_system_id = aws_efs_file_system.redis.id
+      root_directory = "/"
+    }
+  }
+
+  tags = {
+    Environment = var.environment
+  }
+}
+
+# Redis ECS Service
+resource "aws_ecs_service" "redis" {
+  name            = "${var.project_name}-redis"
+  cluster         = aws_ecs_cluster.main.id
+  task_definition = aws_ecs_task_definition.redis.arn
+  desired_count   = 1
+  launch_type     = "FARGATE"
+
+  network_configuration {
+    security_groups  = [aws_security_group.redis.id]
+    subnets          = aws_subnet.private[*].id
+    assign_public_ip = false
+  }
+
+  # Enable service discovery
+  service_registries {
+    registry_arn = aws_service_discovery_service.redis.arn
+  }
+
+  tags = {
+    Environment = var.environment
+  }
+}
+
+# Service Discovery for Redis
+resource "aws_service_discovery_private_dns_namespace" "main" {
+  name        = "${var.project_name}.local"
+  description = "Private DNS namespace for ${var.project_name}"
+  vpc         = aws_vpc.main.id
+
+  tags = {
+    Environment = var.environment
+  }
+}
+
+resource "aws_service_discovery_service" "redis" {
+  name = "redis"
+
+  dns_config {
+    namespace_id = aws_service_discovery_private_dns_namespace.main.id
+
+    dns_records {
+      ttl  = 60
+      type = "A"
+    }
+
+    routing_policy = "MULTIVALUE"
   }
 
   tags = {
@@ -298,6 +498,10 @@ resource "aws_ecs_task_definition" "phillm" {
         {
           name  = "ENVIRONMENT"
           value = var.environment
+        },
+        {
+          name  = "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT"
+          value = "true"
         }
       ]
 
@@ -325,6 +529,14 @@ resource "aws_ecs_task_definition" "phillm" {
         {
           name      = "REDIS_URL"
           valueFrom = aws_ssm_parameter.redis_url.arn
+        },
+        {
+          name      = "TARGET_USER_ID"
+          valueFrom = aws_ssm_parameter.target_user_id.arn
+        },
+        {
+          name      = "SCRAPE_CHANNELS"
+          valueFrom = aws_ssm_parameter.scrape_channels.arn
         }
       ]
 
@@ -373,9 +585,18 @@ resource "aws_ecs_service" "phillm" {
   }
 }
 
-# CloudWatch Log Group
+# CloudWatch Log Groups
 resource "aws_cloudwatch_log_group" "phillm" {
   name              = "/ecs/${var.project_name}"
+  retention_in_days = var.log_retention_days
+
+  tags = {
+    Environment = var.environment
+  }
+}
+
+resource "aws_cloudwatch_log_group" "redis" {
+  name              = "/ecs/${var.project_name}-redis"
   retention_in_days = var.log_retention_days
 
   tags = {

@@ -113,6 +113,11 @@ resource "aws_iam_role_policy_attachment" "ecs_logs_policy" {
   policy_arn = aws_iam_policy.ecs_logs_policy.arn
 }
 
+# Local value to get the correct OIDC provider ARN
+locals {
+  github_oidc_provider_arn = length(aws_iam_openid_connect_provider.github) > 0 ? aws_iam_openid_connect_provider.github[0].arn : data.aws_iam_openid_connect_provider.github.arn
+}
+
 # GitHub Actions Role for deployment
 resource "aws_iam_role" "github_actions_role" {
   name = "${var.project_name}-github-actions-role"
@@ -123,7 +128,7 @@ resource "aws_iam_role" "github_actions_role" {
       {
         Effect = "Allow"
         Principal = {
-          Federated = aws_iam_openid_connect_provider.github.arn
+          Federated = local.github_oidc_provider_arn
         }
         Action = "sts:AssumeRoleWithWebIdentity"
         Condition = {
@@ -131,7 +136,7 @@ resource "aws_iam_role" "github_actions_role" {
             "token.actions.githubusercontent.com:aud" = "sts.amazonaws.com"
           }
           StringLike = {
-            "token.actions.githubusercontent.com:sub" = "repo:YOUR_GITHUB_USERNAME/phillm:*"
+            "token.actions.githubusercontent.com:sub" = "repo:austinlparker/phillm:*"
           }
         }
       }
@@ -143,8 +148,15 @@ resource "aws_iam_role" "github_actions_role" {
   }
 }
 
-# OIDC Provider for GitHub Actions
+# Data source to check if GitHub OIDC provider already exists
+data "aws_iam_openid_connect_provider" "github" {
+  url = "https://token.actions.githubusercontent.com"
+}
+
+# OIDC Provider for GitHub Actions (only create if it doesn't exist)
 resource "aws_iam_openid_connect_provider" "github" {
+  count = length(data.aws_iam_openid_connect_provider.github.arn) > 0 ? 0 : 1
+  
   url = "https://token.actions.githubusercontent.com"
 
   client_id_list = [
@@ -204,7 +216,7 @@ resource "aws_iam_policy" "github_actions_policy" {
         ]
         Resource = [
           aws_ecs_cluster.main.arn,
-          aws_ecs_service.phillm.arn,
+          "arn:aws:ecs:${var.aws_region}:${data.aws_caller_identity.current.account_id}:service/${aws_ecs_cluster.main.name}/${aws_ecs_service.phillm.name}",
           aws_ecs_task_definition.phillm.arn,
           "${aws_ecs_task_definition.phillm.arn}:*"
         ]

@@ -47,6 +47,7 @@ nosetests.xml
 coverage.xml
 *.cover
 .hypothesis/
+htmlcov/
 
 # Logging
 *.log
@@ -88,3 +89,5 @@ infrastructure/terraform/terraform.tfstate
 infrastructure/terraform/terraform.tfstate.backup
 infrastructure/terraform/*.tfvars
 infrastructure/terraform/.terraform.tfstate.lock.info
+
+*.tfvars

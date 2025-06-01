@@ -36,10 +36,13 @@ async def health_check():
     try:
         # Test Redis connection
         vector_store = RedisVectorStore()
-        await vector_store.redis_client.ping()
+        redis_healthy = await vector_store.health_check()
         await vector_store.close()
 
-        return {"status": "healthy", "service": "PhiLLM", "redis": "connected"}
+        if redis_healthy:
+            return {"status": "healthy", "service": "PhiLLM", "redis": "connected"}
+        else:
+            return {"status": "unhealthy", "service": "PhiLLM", "redis": "disconnected"}
     except Exception as e:
         logger.error(f"Health check failed: {e}")
         return {"status": "unhealthy", "service": "PhiLLM", "error": str(e)}

@@ -23,6 +23,14 @@ from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExport
 from opentelemetry.exporter.otlp.proto.grpc.metric_exporter import OTLPMetricExporter
 from opentelemetry.exporter.otlp.proto.grpc._log_exporter import OTLPLogExporter
 from opentelemetry.sdk.resources import SERVICE_NAME, SERVICE_VERSION, Resource
+from opentelemetry.sdk.resources import get_aggregated_resources
+from opentelemetry.sdk.extension.aws.resource import (
+    AwsEc2ResourceDetector,
+    AwsEcsResourceDetector,
+    AwsEksResourceDetector,
+    AwsLambdaResourceDetector,
+    AwsBeanstalkResourceDetector,
+)
 from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
 from opentelemetry.instrumentation.httpx import HTTPXClientInstrumentor
 from opentelemetry.instrumentation.redis import RedisInstrumentor
@@ -85,8 +93,8 @@ class TelemetryConfig:
             pass
 
         try:
-            # Create resource
-            resource = Resource.create(
+            # Create base resource
+            base_resource = Resource.create(
                 {
                     SERVICE_NAME: self.service_name,
                     SERVICE_VERSION: self.service_version,
@@ -94,6 +102,27 @@ class TelemetryConfig:
                     "service.instance.id": os.getenv("HOSTNAME", "unknown"),
                 }
             )
+
+            # Create AWS resource detectors
+            aws_detectors = [
+                AwsEcsResourceDetector(),  # For ECS Fargate
+                AwsEc2ResourceDetector(),  # For EC2 instances
+                AwsEksResourceDetector(),  # For EKS
+                AwsBeanstalkResourceDetector(),  # For Elastic Beanstalk
+                AwsLambdaResourceDetector(),  # For Lambda
+            ]
+
+            # Aggregate resources with AWS detection
+            try:
+                resource = get_aggregated_resources(
+                    detectors=aws_detectors,
+                    initial_resource=base_resource,
+                    timeout=5,  # 5 second timeout for resource detection
+                )
+                logger.info(f"🔧 Detected AWS resources: {[str(attr) for attr in resource.attributes.keys() if attr.startswith('aws.') or attr.startswith('cloud.')]}")
+            except Exception as e:
+                logger.warning(f"Failed to detect AWS resources: {e}, using base resource")
+                resource = base_resource
 
             # Setup tracing
             self._setup_tracing(resource)

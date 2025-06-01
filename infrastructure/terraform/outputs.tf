@@ -52,3 +52,39 @@ output "cloudwatch_log_group" {
   description = "Name of the CloudWatch log group"
   value       = aws_cloudwatch_log_group.phillm.name
 }
+
+# Redis ECS outputs
+output "redis_service_discovery_endpoint" {
+  description = "Service discovery endpoint for Redis"
+  value       = "redis.${var.project_name}.local"
+}
+
+output "redis_port" {
+  description = "Port of the Redis service"
+  value       = 6379
+}
+
+output "redis_password_ssm_parameter" {
+  description = "SSM parameter name for Redis password"
+  value       = aws_ssm_parameter.redis_password.name
+}
+
+output "redis_url_ssm_parameter" {
+  description = "SSM parameter name for Redis URL"
+  value       = aws_ssm_parameter.redis_url.name
+}
+
+output "redis_efs_id" {
+  description = "EFS file system ID for Redis data persistence"
+  value       = aws_efs_file_system.redis.id
+}
+
+output "redis_service_name" {
+  description = "Name of the Redis ECS service"
+  value       = aws_ecs_service.redis.name
+}
+
+output "redis_task_definition_family" {
+  description = "Family of the Redis ECS task definition"
+  value       = aws_ecs_task_definition.redis.family
+}

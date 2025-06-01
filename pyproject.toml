@@ -31,12 +31,15 @@ dependencies = [
     "opentelemetry-instrumentation-requests>=0.42b0",
     "opentelemetry-instrumentation-aiohttp-client>=0.42b0",
     "opentelemetry-instrumentation-openai-v2>=2.1b0",
+    "opentelemetry-sdk-extension-aws>=2.0.0",
 ]
 
 [project.optional-dependencies]
 dev = [
     "pytest>=7.4.0",
     "pytest-asyncio>=0.21.0",
+    "pytest-cov>=4.1.0",
+    "coverage[toml]>=7.3.0",
     "black>=23.0.0",
     "ruff>=0.1.0",
     "mypy>=1.7.0",
@@ -59,3 +62,39 @@ include = ["phillm*"]
 
 [tool.pytest.ini_options]
 asyncio_default_fixture_loop_scope = "function"
+addopts = [
+    "--cov=phillm",
+    "--cov-report=term-missing",
+    "--cov-report=html:htmlcov",
+    "--cov-report=xml:coverage.xml",
+    "--cov-fail-under=70",
+]
+testpaths = ["tests"]
+
+[tool.coverage.run]
+source = ["phillm"]
+omit = [
+    "tests/*",
+    "phillm/__init__.py",
+    "*/migrations/*",
+    "*/venv/*",
+    "*/.venv/*",
+]
+branch = true
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "def __repr__",
+    "raise AssertionError",
+    "raise NotImplementedError",
+    "if __name__ == .__main__.:",
+    "if TYPE_CHECKING:",
+    "class .*\\bProtocol\\):",
+    "@(abc\\.)?abstractmethod",
+]
+show_missing = true
+skip_covered = false
+
+[tool.coverage.html]
+directory = "htmlcov"

@@ -207,19 +207,39 @@ resource "aws_iam_policy" "github_actions_policy" {
         Effect = "Allow"
         Action = [
           "ecs:DescribeTaskDefinition",
-          "ecs:RegisterTaskDefinition",
+          "ecs:DescribeTaskDefinitions",
+          "ecs:RegisterTaskDefinition"
+        ]
+        Resource = "*"
+      },
+      {
+        Effect = "Allow"
+        Action = [
           "ecs:UpdateService",
           "ecs:DescribeServices",
-          "ecs:DescribeClusters",
+          "ecs:ListServices"
+        ]
+        Resource = [
+          "arn:aws:ecs:${var.aws_region}:${data.aws_caller_identity.current.account_id}:service/${aws_ecs_cluster.main.name}/${aws_ecs_service.phillm.name}",
+          "arn:aws:ecs:${var.aws_region}:${data.aws_caller_identity.current.account_id}:service/${aws_ecs_cluster.main.name}/*"
+        ]
+      },
+      {
+        Effect = "Allow"
+        Action = [
+          "ecs:DescribeClusters"
+        ]
+        Resource = [
+          aws_ecs_cluster.main.arn
+        ]
+      },
+      {
+        Effect = "Allow"
+        Action = [
           "ecs:DescribeTasks",
           "ecs:ListTasks"
         ]
-        Resource = [
-          aws_ecs_cluster.main.arn,
-          "arn:aws:ecs:${var.aws_region}:${data.aws_caller_identity.current.account_id}:service/${aws_ecs_cluster.main.name}/${aws_ecs_service.phillm.name}",
-          aws_ecs_task_definition.phillm.arn,
-          "${aws_ecs_task_definition.phillm.arn}:*"
-        ]
+        Resource = "*"
       },
       {
         Effect = "Allow"

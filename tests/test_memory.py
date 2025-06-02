@@ -13,21 +13,22 @@ from phillm.memory.conversation_memory import (
 
 @pytest.fixture
 def memory():
-    with patch("phillm.memory.conversation_memory.redis.from_url") as mock_redis, patch(
-        "phillm.memory.conversation_memory.get_tracer"
-    ) as mock_tracer:
+    with (
+        patch("phillm.memory.conversation_memory.redis.from_url") as mock_redis,
+        patch("phillm.memory.conversation_memory.get_tracer") as mock_tracer,
+    ):
         mock_client = AsyncMock()
         mock_redis.return_value = mock_client
-        
+
         # Mock tracer with a proper span context manager
         mock_span = MagicMock()
         mock_span.__enter__ = MagicMock(return_value=mock_span)
         mock_span.__exit__ = MagicMock(return_value=None)
-        
+
         mock_tracer_instance = MagicMock()
         mock_tracer_instance.start_as_current_span.return_value = mock_span
         mock_tracer.return_value = mock_tracer_instance
-        
+
         memory_instance = ConversationMemory()
         memory_instance.redis_client = mock_client
         return memory_instance

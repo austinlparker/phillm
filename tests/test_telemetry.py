@@ -44,14 +44,13 @@ def test_setup_telemetry_success(
     with patch.dict(os.environ, {"HONEYCOMB_API_KEY": "test-key"}):
         config = TelemetryConfig()
 
-    with patch.object(config, "_setup_tracing"), patch.object(
-        config, "_setup_metrics"
-    ), patch.object(config, "_setup_logging"), patch.object(
-        config, "_setup_event_logging"
-    ), patch.object(
-        config, "_setup_auto_instrumentation"
-    ), patch.object(
-        config, "_setup_custom_metrics"
+    with (
+        patch.object(config, "_setup_tracing"),
+        patch.object(config, "_setup_metrics"),
+        patch.object(config, "_setup_logging"),
+        patch.object(config, "_setup_event_logging"),
+        patch.object(config, "_setup_auto_instrumentation"),
+        patch.object(config, "_setup_custom_metrics"),
     ):
         result = config.setup_telemetry()
 
@@ -157,7 +156,10 @@ def test_setup_auto_instrumentation(
     mock_httpx._is_instrumented = False
     mock_openai._is_instrumented = False
 
-    with patch("opentelemetry.instrumentation.openai_v2.utils.is_content_enabled", return_value=True):
+    with patch(
+        "opentelemetry.instrumentation.openai_v2.utils.is_content_enabled",
+        return_value=True,
+    ):
         telemetry_config._setup_auto_instrumentation()
 
     mock_fastapi().instrument.assert_called_once()
@@ -166,11 +168,11 @@ def test_setup_auto_instrumentation(
 
 
 def test_setup_fallback_telemetry(telemetry_config):
-    with patch("phillm.telemetry.TracerProvider") as mock_trace_provider, patch(
-        "phillm.telemetry.MeterProvider"
-    ) as mock_meter_provider, patch(
-        "phillm.telemetry.LoggerProvider"
-    ) as mock_log_provider:
+    with (
+        patch("phillm.telemetry.TracerProvider") as mock_trace_provider,
+        patch("phillm.telemetry.MeterProvider") as mock_meter_provider,
+        patch("phillm.telemetry.LoggerProvider") as mock_log_provider,
+    ):
         telemetry_config._setup_fallback_telemetry()
 
         mock_trace_provider.assert_called_once()

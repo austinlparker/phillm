@@ -119,9 +119,13 @@ class TelemetryConfig:
                     initial_resource=base_resource,
                     timeout=5,  # 5 second timeout for resource detection
                 )
-                logger.info(f"🔧 Detected AWS resources: {[str(attr) for attr in resource.attributes.keys() if attr.startswith('aws.') or attr.startswith('cloud.')]}")
+                logger.info(
+                    f"🔧 Detected AWS resources: {[str(attr) for attr in resource.attributes.keys() if attr.startswith('aws.') or attr.startswith('cloud.')]}"
+                )
             except Exception as e:
-                logger.warning(f"Failed to detect AWS resources: {e}, using base resource")
+                logger.warning(
+                    f"Failed to detect AWS resources: {e}, using base resource"
+                )
                 resource = base_resource
 
             # Setup tracing

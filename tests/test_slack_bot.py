@@ -15,16 +15,14 @@ def slack_bot():
             "SCRAPE_CHANNELS": "general,random",
         },
     ):
-        with patch("phillm.slack.bot.AsyncApp"), patch(
-            "phillm.slack.bot.AsyncSocketModeHandler"
-        ), patch("phillm.slack.bot.EmbeddingService"), patch(
-            "phillm.slack.bot.CompletionService"
-        ), patch(
-            "phillm.slack.bot.RedisVectorStore"
-        ), patch(
-            "phillm.slack.bot.ConversationMemory"
-        ), patch(
-            "phillm.slack.bot.UserManager"
+        with (
+            patch("phillm.slack.bot.AsyncApp"),
+            patch("phillm.slack.bot.AsyncSocketModeHandler"),
+            patch("phillm.slack.bot.EmbeddingService"),
+            patch("phillm.slack.bot.CompletionService"),
+            patch("phillm.slack.bot.RedisVectorStore"),
+            patch("phillm.slack.bot.ConversationMemory"),
+            patch("phillm.slack.bot.UserManager"),
         ):
             bot = SlackBot()
             bot.app.client = AsyncMock()
@@ -110,7 +108,9 @@ async def test_generate_ai_response_with_fallback(slack_bot):
         slack_bot.vector_store.get_recent_messages.return_value = [
             {"message": "Recent message"}
         ]
-        slack_bot.completion_service.generate_response.return_value = "Fallback response"
+        slack_bot.completion_service.generate_response.return_value = (
+            "Fallback response"
+        )
 
         response, embedding = await slack_bot._generate_ai_response(query)
 
@@ -313,6 +313,4 @@ async def test_handle_mention_with_error(slack_bot):
     await slack_bot._handle_mention(body, say)
 
     # Should send error message
-    say.assert_called_with(
-        "Sorry, I'm having trouble generating a response right now."
-    )
+    say.assert_called_with("Sorry, I'm having trouble generating a response right now.")

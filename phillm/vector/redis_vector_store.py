@@ -18,11 +18,11 @@ class RedisVectorStore:
     def __init__(self):
         self.redis_url = os.getenv("REDIS_URL", "redis://localhost:6379")
         self.redis_password = os.getenv("REDIS_PASSWORD")
-        
+
         # Connection configuration
         self.connection_timeout = 10  # seconds
         self.retry_delay = 5  # seconds between health check attempts
-        
+
         # Initialize clients as None, will be created on demand
         self.redis_client = None
         self.sync_redis_client = None
@@ -73,35 +73,36 @@ class RedisVectorStore:
             except Exception:
                 # Connection lost, need to reconnect
                 self._redis_healthy = False
-                
+
         logger.info("Connecting to Redis...")
-        
+
         # Initialize async Redis client for regular operations
         self.redis_client = redis.from_url(
-            self.redis_url, 
-            password=self.redis_password, 
+            self.redis_url,
+            password=self.redis_password,
             decode_responses=True,
             socket_connect_timeout=self.connection_timeout,
-            socket_timeout=self.connection_timeout
+            socket_timeout=self.connection_timeout,
         )
 
         # Initialize sync Redis client for RedisVL operations
         import redis as sync_redis
+
         self.sync_redis_client = sync_redis.Redis.from_url(
-            self.redis_url, 
-            password=self.redis_password, 
+            self.redis_url,
+            password=self.redis_password,
             decode_responses=True,
             socket_connect_timeout=self.connection_timeout,
-            socket_timeout=self.connection_timeout
+            socket_timeout=self.connection_timeout,
         )
-        
+
         # Test the connections
         await self.redis_client.ping()
         self.sync_redis_client.ping()
-        
+
         self._redis_healthy = True
         logger.info("✅ Redis connection established successfully")
-    
+
     async def health_check(self) -> bool:
         """Check if Redis is healthy and available"""
         try:
@@ -116,7 +117,7 @@ class RedisVectorStore:
         """Initialize the vector search index"""
         # Ensure Redis connection first
         await self._ensure_redis_connection()
-        
+
         # Create SearchIndex instance using the sync redis client
         # RedisVL works with standard redis-py clients
         self.index = SearchIndex(
@@ -165,7 +166,7 @@ class RedisVectorStore:
     ) -> str:
         """Store a message with its embedding in the vector database"""
         await self._ensure_redis_connection()
-        
+
         message_id = self._generate_message_id(user_id, channel_id, timestamp)
 
         # Prepare data for storage with cleaner separation
@@ -197,7 +198,7 @@ class RedisVectorStore:
     ) -> List[Dict]:
         """Find similar messages using Redis vector search"""
         await self._ensure_redis_connection()
-        
+
         # Ensure index is initialized
         if not self.index:
             await self.initialize_index()
@@ -276,7 +277,7 @@ class RedisVectorStore:
     async def get_user_message_count(self, user_id: str) -> int:
         """Get total message count for a user using vector index"""
         await self._ensure_redis_connection()
-        
+
         # Use FT.SEARCH to count documents with user_id tag
         result = await self.redis_client.execute_command(
             "FT.SEARCH",

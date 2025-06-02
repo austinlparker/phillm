@@ -118,7 +118,7 @@ async def test_find_similar_messages_with_text_query(vector_store):
 async def test_get_user_message_count(vector_store):
     # Mock async methods
     vector_store._ensure_redis_connection = AsyncMock()
-    
+
     # Mock FT.SEARCH response - first element is count
     vector_store.redis_client.execute_command = AsyncMock(return_value=[42])
 
@@ -134,34 +134,36 @@ async def test_get_user_message_count(vector_store):
 async def test_get_recent_messages(vector_store):
     # Mock async methods
     vector_store._ensure_redis_connection = AsyncMock()
-    
+
     # Mock FT.SEARCH response with SORTBY timestamp DESC
     # Format: [count, doc_id1, [field1, value1, field2, value2], doc_id2, [field3, value3, field4, value4]]
-    vector_store.redis_client.execute_command = AsyncMock(return_value=[
-        2,  # count
-        "msg:newer_id",
-        [
-            "message_text",
-            "Goodbye world",
-            "channel_id",
-            "C123",
-            "timestamp",
-            "1234567891.123",
-            "message_id",
-            "newer_id",
-        ],
-        "msg:older_id",
-        [
-            "message_text",
-            "Hello world",
-            "channel_id",
-            "C123",
-            "timestamp",
-            "1234567890.123",
-            "message_id",
-            "older_id",
-        ],
-    ])
+    vector_store.redis_client.execute_command = AsyncMock(
+        return_value=[
+            2,  # count
+            "msg:newer_id",
+            [
+                "message_text",
+                "Goodbye world",
+                "channel_id",
+                "C123",
+                "timestamp",
+                "1234567891.123",
+                "message_id",
+                "newer_id",
+            ],
+            "msg:older_id",
+            [
+                "message_text",
+                "Hello world",
+                "channel_id",
+                "C123",
+                "timestamp",
+                "1234567890.123",
+                "message_id",
+                "older_id",
+            ],
+        ]
+    )
 
     messages = await vector_store.get_recent_messages("U123", limit=10)
 

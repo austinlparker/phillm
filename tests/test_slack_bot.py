@@ -45,7 +45,9 @@ async def test_process_target_user_message(slack_bot):
     # Mock async methods properly
     slack_bot.vector_store.message_exists = AsyncMock(return_value=False)
     slack_bot.vector_store.store_message = AsyncMock(return_value=None)
-    slack_bot.embedding_service.create_embedding = AsyncMock(return_value=[0.1, 0.2, 0.3])
+    slack_bot.embedding_service.create_embedding = AsyncMock(
+        return_value=[0.1, 0.2, 0.3]
+    )
 
     with patch("phillm.slack.bot.update_stats"):
         await slack_bot._process_target_user_message(event)
@@ -85,10 +87,12 @@ async def test_generate_ai_response(slack_bot):
         mock_embedding_service.return_value = mock_service
 
         # Mock async methods
-        slack_bot.vector_store.find_similar_messages = AsyncMock(return_value=[
-            {"message": "I'm good", "similarity": 0.8}
-        ])
-        slack_bot.completion_service.generate_response = AsyncMock(return_value="I'm doing well!")
+        slack_bot.vector_store.find_similar_messages = AsyncMock(
+            return_value=[{"message": "I'm good", "similarity": 0.8}]
+        )
+        slack_bot.completion_service.generate_response = AsyncMock(
+            return_value="I'm doing well!"
+        )
 
         response, embedding = await slack_bot._generate_ai_response(query)
 
@@ -108,10 +112,12 @@ async def test_generate_ai_response_with_fallback(slack_bot):
 
         # No similar messages found, should use recent messages fallback
         slack_bot.vector_store.find_similar_messages = AsyncMock(side_effect=[[], []])
-        slack_bot.vector_store.get_recent_messages = AsyncMock(return_value=[
-            {"message": "Recent message"}
-        ])
-        slack_bot.completion_service.generate_response = AsyncMock(return_value="Fallback response")
+        slack_bot.vector_store.get_recent_messages = AsyncMock(
+            return_value=[{"message": "Recent message"}]
+        )
+        slack_bot.completion_service.generate_response = AsyncMock(
+            return_value="Fallback response"
+        )
 
         response, embedding = await slack_bot._generate_ai_response(query)
 
@@ -230,7 +236,7 @@ async def test_start_and_stop(slack_bot):
     # Mock the handler methods
     slack_bot.handler.start_async = AsyncMock()
     slack_bot.handler.close_async = AsyncMock()
-    
+
     # The vector_store, memory, and user_manager are already AsyncMock from fixture
     # But let's ensure their close methods are properly mocked
     slack_bot.vector_store.close = AsyncMock()

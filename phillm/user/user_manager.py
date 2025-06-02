@@ -1,6 +1,6 @@
 import os
 import time
-from typing import Dict, Optional
+from typing import Dict, List, Optional, Any, Union, overload, Literal
 import redis.asyncio as redis
 from loguru import logger
 from phillm.telemetry import get_tracer
@@ -9,7 +9,7 @@ from phillm.telemetry import get_tracer
 class UserManager:
     """Manages user information and display name mapping"""
 
-    def __init__(self, slack_client=None):
+    def __init__(self, slack_client: Optional[Any] = None) -> None:
         self.redis_url = os.getenv("REDIS_URL", "redis://localhost:6379")
         self.redis_password = os.getenv("REDIS_PASSWORD")
 
@@ -23,7 +23,7 @@ class UserManager:
         self.cache_ttl = int(os.getenv("USER_CACHE_TTL", "86400"))  # 24 hours
         self.batch_size = 50  # Process users in batches
 
-    def set_slack_client(self, slack_client):
+    def set_slack_client(self, slack_client: Any) -> None:
         """Set the Slack client for API calls"""
         self.slack_client = slack_client
 
@@ -78,7 +78,7 @@ class UserManager:
             logger.debug(f"👤 Falling back to user_id '{user_id}' as display name")
             return user_id  # Fallback to user ID
 
-    async def get_user_info(self, user_id: str) -> Dict:
+    async def get_user_info(self, user_id: str) -> Dict[str, Any]:
         """Get comprehensive user information"""
         try:
             # Check cache first
@@ -104,7 +104,7 @@ class UserManager:
             logger.error(f"Error getting user info for {user_id}: {e}")
             return {"user_id": user_id, "display_name": user_id, "real_name": user_id}
 
-    async def get_multiple_users(self, user_ids: list) -> Dict[str, str]:
+    async def get_multiple_users(self, user_ids: List[str]) -> Dict[str, str]:
         """Get display names for multiple users efficiently"""
         tracer = get_tracer()
 
@@ -168,9 +168,19 @@ class UserManager:
             logger.error(f"Error preloading channel users for {channel_id}: {e}")
             return {}
 
+    @overload
+    async def _get_cached_user_info(
+        self, user_id: str, full_info: Literal[False] = False
+    ) -> Optional[str]: ...
+
+    @overload
+    async def _get_cached_user_info(
+        self, user_id: str, full_info: Literal[True]
+    ) -> Optional[Dict[str, Any]]: ...
+
     async def _get_cached_user_info(
         self, user_id: str, full_info: bool = False
-    ) -> Optional[str]:
+    ) -> Union[str, Dict[str, Any], None]:
         """Get user info from cache"""
         try:
             cache_key = f"user_info:{user_id}"
@@ -206,7 +216,7 @@ class UserManager:
             logger.error(f"Error getting cached user info for {user_id}: {e}")
             return None
 
-    async def _cache_user_info(self, user_id: str, user_info: Dict):
+    async def _cache_user_info(self, user_id: str, user_info: Dict[str, Any]) -> None:
         """Cache user information"""
         try:
             cache_key = f"user_info:{user_id}"
@@ -229,7 +239,7 @@ class UserManager:
         except Exception as e:
             logger.error(f"Error caching user info for {user_id}: {e}")
 
-    async def _fetch_user_from_slack(self, user_id: str) -> Optional[Dict]:
+    async def _fetch_user_from_slack(self, user_id: str) -> Optional[Dict[str, Any]]:
         """Fetch user information from Slack API"""
         try:
             if not self.slack_client:
@@ -271,7 +281,7 @@ class UserManager:
             logger.error(f"Error fetching user {user_id} from Slack: {e}")
             return None
 
-    async def _fetch_users_batch(self, user_ids: list) -> Dict[str, str]:
+    async def _fetch_users_batch(self, user_ids: List[str]) -> Dict[str, str]:
         """Fetch multiple users efficiently"""
         result = {}
 
@@ -279,7 +289,7 @@ class UserManager:
         # But we can do them concurrently for better performance
         import asyncio
 
-        async def fetch_single_user(user_id):
+        async def fetch_single_user(user_id: str) -> tuple[str, str]:
             user_info = await self._fetch_user_from_slack(user_id)
             if user_info:
                 display_name = user_info.get(
@@ -313,7 +323,7 @@ class UserManager:
 
         return result
 
-    async def invalidate_user_cache(self, user_id: str):
+    async def invalidate_user_cache(self, user_id: str) -> None:
         """Invalidate cached user information"""
         try:
             cache_key = f"user_info:{user_id}"
@@ -322,7 +332,7 @@ class UserManager:
         except Exception as e:
             logger.error(f"Error invalidating cache for user {user_id}: {e}")
 
-    async def get_cache_stats(self) -> Dict:
+    async def get_cache_stats(self) -> Dict[str, Any]:
         """Get cache statistics"""
         try:
             # Count cached users
@@ -355,6 +365,6 @@ class UserManager:
             logger.error(f"Error getting cache stats: {e}")
             return {"error": str(e)}
 
-    async def close(self):
+    async def close(self) -> None:
         """Close Redis connection"""
         await self.redis_client.close()

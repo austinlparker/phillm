@@ -1,6 +1,7 @@
 import os
 import asyncio
 from datetime import datetime, timedelta
+from typing import List, Dict, Any, Optional, Tuple
 from slack_bolt.async_app import AsyncApp
 from slack_bolt.adapter.socket_mode.async_handler import AsyncSocketModeHandler
 from loguru import logger
@@ -58,7 +59,7 @@ class SlackBot:
             logger.info(f"🔍 IM CREATED EVENT: {body}")
 
         # Catch-all event handler for debugging
-        @self.app.event({"type": lambda x: True})
+        @self.app.event({"type": lambda x: True})  # type: ignore[dict-item]
         async def handle_all_events(body, logger):
             event_type = body.get("event", {}).get("type", "unknown")
             if event_type not in ["message", "app_mention"]:
@@ -102,6 +103,10 @@ class SlackBot:
         message_text = event.get("text", "")
         channel_id = event.get("channel")
         timestamp = event.get("ts")
+
+        if not self.target_user_id:
+            logger.error("Target user ID not configured")
+            return
 
         try:
             update_stats(last_api_call=datetime.now().isoformat())
@@ -150,8 +155,6 @@ class SlackBot:
                 message_text,
                 conversation_context=conversation_context,
                 requester_display_name=user_display_name,
-                slack_client=self.app.client,
-                channel_id=channel_id,
             )
 
             # Response was already sent via streaming, no need to use say()
@@ -286,9 +289,9 @@ class SlackBot:
         self,
         query: str,
         is_dm: bool = False,
-        conversation_context: str = None,
-        requester_display_name: str = None,
-    ) -> tuple[str, list]:
+        conversation_context: Optional[str] = None,
+        requester_display_name: Optional[str] = None,
+    ) -> Tuple[str, List[float]]:
         # Create embedding once and reuse it
         from phillm.ai.embeddings import EmbeddingService
 
@@ -297,8 +300,12 @@ class SlackBot:
 
         # Try with moderate threshold first for better quality examples
         # Use fewer examples but prioritize quality for better style transfer
+        if not self.target_user_id:
+            logger.error("Target user ID not configured")
+            return "", []
+            
         similar_messages = await self.vector_store.find_similar_messages(
-            query_embedding, user_id=self.target_user_id, limit=8, threshold=0.35
+            query, user_id=self.target_user_id, limit=8, threshold=0.35
         )
 
         # If we get very few results, try with lower threshold
@@ -307,7 +314,7 @@ class SlackBot:
                 f"🔄 Only {len(similar_messages)} messages found with 0.35 threshold, trying lower threshold"
             )
             similar_messages = await self.vector_store.find_similar_messages(
-                query_embedding, user_id=self.target_user_id, limit=8, threshold=0.2
+                query, user_id=self.target_user_id, limit=8, threshold=0.2
             )
 
         # If still no results, get recent messages as fallback
@@ -388,7 +395,7 @@ class SlackBot:
                 channel_info = await self.app.client.conversations_info(
                     channel=channel_id
                 )
-                channel_name = channel_info.get("channel", {}).get("name", channel_id)
+                channel_name = channel_info.get("channel", {}).get("name", channel_id)  # type: ignore[call-overload]
             except Exception:
                 channel_name = channel_id
 
@@ -407,9 +414,12 @@ class SlackBot:
         except Exception as e:
             logger.error(f"Error storing channel interaction memory: {e}")
 
-    async def check_scraping_completeness_simple(self, channel_id: str) -> dict:
+    async def check_scraping_completeness_simple(self, channel_id: str) -> Dict[str, Any]:
         """Simple completeness check - see if there are older messages than what we have stored"""
         try:
+            if not self.target_user_id:
+                return {"complete": False, "reason": "Target user ID not configured", "needs_scraping": True}
+            
             # Get the oldest message we have stored for this user in this channel
             oldest_stored = await self.vector_store.get_oldest_stored_message(
                 self.target_user_id, channel_id
@@ -444,9 +454,10 @@ class SlackBot:
                     }
 
                 # Check if any of these older messages are from our target user
-                target_user_older_messages = [
+                messages_list: List[Dict[str, Any]] = older_check.get("messages", [])
+                target_user_older_messages: List[Dict[str, Any]] = [
                     msg
-                    for msg in older_check.get("messages", [])
+                    for msg in messages_list
                     if msg.get("user") == self.target_user_id and msg.get("text")
                 ]
 
@@ -493,9 +504,12 @@ class SlackBot:
                 "needs_scraping": True,
             }
 
-    async def check_scraping_completeness(self, channel_id: str) -> dict:
+    async def check_scraping_completeness(self, channel_id: str) -> Dict[str, Any]:
         """Check if we have scraped all available message history for the target user in a channel"""
         try:
+            if not self.target_user_id:
+                return {"complete": False, "reason": "Target user ID not configured", "needs_scraping": True}
+            
             # Get the oldest message we have stored for this user in this channel
             oldest_stored = await self.vector_store.get_oldest_stored_message(
                 self.target_user_id, channel_id
@@ -550,7 +564,7 @@ class SlackBot:
 
                     try:
                         batch_result = await self.app.client.conversations_history(
-                            **kwargs
+                            **kwargs  # type: ignore[arg-type]
                         )
                     except Exception as e:
                         error_str = str(e).lower()
@@ -574,7 +588,7 @@ class SlackBot:
                                 "oldest_available": None,
                             }
 
-                    messages = batch_result.get("messages", [])
+                    messages: List[Dict[str, Any]] = batch_result.get("messages", [])
 
                     # Look for target user messages in this batch
                     target_messages = [
@@ -594,7 +608,7 @@ class SlackBot:
                             target_user_oldest = batch_oldest
 
                     # Check if we should continue
-                    if not batch_result.get("has_more") or not batch_result.get(
+                    if not batch_result.get("has_more") or not batch_result.get(  # type: ignore[call-overload]
                         "response_metadata", {}
                     ).get("next_cursor"):
                         break
@@ -689,8 +703,12 @@ class SlackBot:
             }
 
     async def scrape_channel_history(
-        self, channel_identifier: str, days_back: int = None
-    ):
+        self, channel_identifier: str, days_back: Optional[int] = None
+    ) -> None:
+        if not self.target_user_id:
+            logger.error("Target user ID not configured")
+            return
+            
         try:
             # Check if it's already a channel ID (starts with C)
             if channel_identifier.startswith("C"):
@@ -711,6 +729,7 @@ class SlackBot:
                     return
 
             # Check for existing scraping state
+            assert channel_id is not None  # Should be resolved by this point
             scrape_state = await self.vector_store.get_scrape_state(channel_id)
             cursor = scrape_state.get("cursor")
             oldest = None
@@ -752,7 +771,7 @@ class SlackBot:
 
                 try:
                     messages_result = await self.app.client.conversations_history(
-                        **kwargs
+                        **kwargs  # type: ignore[arg-type]
                     )
                 except Exception as e:
                     error_str = str(e).lower()
@@ -770,12 +789,12 @@ class SlackBot:
                     else:
                         raise e
 
-                messages = messages_result.get("messages", [])
+                messages: List[Dict[str, Any]] = messages_result.get("messages", [])
                 total_messages_fetched += len(messages)
 
                 # Log pagination info for debugging
                 has_more = messages_result.get("has_more", False)
-                next_cursor = messages_result.get("response_metadata", {}).get(
+                next_cursor = messages_result.get("response_metadata", {}).get(  # type: ignore[call-overload]
                     "next_cursor"
                 )
                 logger.debug(
@@ -835,6 +854,7 @@ class SlackBot:
                 last_message_ts = messages[-1]["ts"] if messages else None
                 oldest_in_batch = messages[0]["ts"] if messages else None
 
+                assert channel_id is not None  # Should be set by this point
                 await self.vector_store.save_scrape_state(
                     channel_id, next_cursor, last_message_ts, oldest_in_batch
                 )
@@ -860,6 +880,7 @@ class SlackBot:
             )
 
             # Clear scraping state when complete
+            assert channel_id is not None  # Should be set by this point
             await self.vector_store.clear_scrape_state(channel_id)
 
             update_stats(
@@ -911,6 +932,7 @@ class SlackBot:
                         continue
 
                 # Check if we have complete history for this channel using simple check
+                assert channel_id is not None  # Help mypy understand the None check above
                 logger.info(
                     f"🔍 Checking completeness for channel {channel_name} ({channel_id})"
                 )

@@ -2,13 +2,14 @@ from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse
 import os
 from datetime import datetime
+from typing import Any, Dict, List, Union
 
 from phillm.vector.redis_vector_store import RedisVectorStore
 
 debug_router = APIRouter()
 
 # Global stats tracking
-debug_stats = {
+debug_stats: Dict[str, Any] = {
     "bot_started_at": None,
     "last_scrape_started": None,
     "last_scrape_completed": None,
@@ -22,7 +23,7 @@ debug_stats = {
 }
 
 
-def update_stats(**kwargs):
+def update_stats(**kwargs: Any) -> None:
     """Update debug stats"""
     for key, value in kwargs.items():
         if key in debug_stats:
@@ -32,23 +33,27 @@ def update_stats(**kwargs):
                 and value == 1
             ):
                 # Increment counter
-                debug_stats[key] += value
+                current_val = debug_stats[key]
+                if isinstance(current_val, int):
+                    debug_stats[key] = current_val + value
             else:
                 debug_stats[key] = value
 
 
-def add_error(error_msg: str):
+def add_error(error_msg: str) -> None:
     """Add error to debug log"""
-    debug_stats["errors"].append(
-        {"timestamp": datetime.now().isoformat(), "error": str(error_msg)}
-    )
-    # Keep only last 10 errors
-    if len(debug_stats["errors"]) > 10:
-        debug_stats["errors"] = debug_stats["errors"][-10:]
+    errors_list = debug_stats["errors"]
+    if isinstance(errors_list, list):
+        errors_list.append(
+            {"timestamp": datetime.now().isoformat(), "error": str(error_msg)}
+        )
+        # Keep only last 10 errors
+        if len(errors_list) > 10:
+            debug_stats["errors"] = errors_list[-10:]
 
 
 @debug_router.get("/debug", response_class=HTMLResponse)
-async def debug_page(request: Request):
+async def debug_page(request: Request) -> str:
     """Debug dashboard showing bot status and stats"""
 
     # Get Redis stats
@@ -211,7 +216,7 @@ async def debug_page(request: Request):
                     </div>
                     <div class="metric">
                         <h4>Scraping Status</h4>
-                        <p>{debug_stats["current_scraping_status"].title()}</p>
+                        <p>{str(debug_stats["current_scraping_status"]).title()}</p>
                     </div>
                     <div class="metric">
                         <h4>Total Processed</h4>
@@ -287,8 +292,9 @@ async def debug_page(request: Request):
                 <div class="log">
     """
 
-    if debug_stats["errors"]:
-        for error in reversed(debug_stats["errors"]):  # Show newest first
+    errors_list = debug_stats["errors"]
+    if isinstance(errors_list, list) and errors_list:
+        for error in reversed(errors_list):  # Show newest first
             html_content += f"<div><span class='timestamp'>[{error['timestamp']}]</span> {error['error']}</div>"
     else:
         html_content += "<div>No recent errors</div>"
@@ -377,13 +383,13 @@ async def debug_page(request: Request):
 
 
 @debug_router.get("/debug/stats")
-async def get_debug_stats():
+async def get_debug_stats() -> Dict[str, Any]:
     """Get debug stats as JSON"""
     return debug_stats
 
 
 @debug_router.get("/debug/stores/overview")
-async def get_stores_overview():
+async def get_stores_overview() -> Dict[str, Any]:
     """Get overview of all stores and their statistics"""
     try:
         from phillm.memory import ConversationMemory
@@ -428,7 +434,7 @@ async def get_stores_overview():
 
 
 @debug_router.post("/debug/stores/vector/clear/{user_id}")
-async def clear_vector_store(user_id: str):
+async def clear_vector_store(user_id: str) -> Dict[str, Any]:
     """Clear all vector store data for a specific user"""
     try:
         vector_store = RedisVectorStore()
@@ -457,7 +463,7 @@ async def clear_vector_store(user_id: str):
 
 
 @debug_router.post("/debug/stores/memory/clear/{user_id}")
-async def clear_memory_store(user_id: str):
+async def clear_memory_store(user_id: str) -> Dict[str, Any]:
     """Clear all memory store data for a specific user"""
     try:
         from phillm.memory import ConversationMemory
@@ -499,7 +505,7 @@ async def clear_memory_store(user_id: str):
 
 
 @debug_router.post("/debug/stores/cache/clear")
-async def clear_user_cache():
+async def clear_user_cache() -> Dict[str, Any]:
     """Clear all user cache data"""
     try:
         from phillm.user import UserManager
@@ -536,7 +542,7 @@ async def clear_user_cache():
 
 
 @debug_router.post("/debug/stores/scraping/reset/{channel_id}")
-async def reset_scraping_state(channel_id: str):
+async def reset_scraping_state(channel_id: str) -> Dict[str, Any]:
     """Reset scraping state for a channel"""
     try:
         vector_store = RedisVectorStore()
@@ -562,7 +568,7 @@ async def reset_scraping_state(channel_id: str):
 
 
 @debug_router.post("/debug/stores/clear-all/{user_id}")
-async def clear_all_stores(user_id: str):
+async def clear_all_stores(user_id: str) -> Dict[str, Any]:
     """Clear all stores for a specific user (DANGEROUS!)"""
     try:
         results = {}
@@ -574,7 +580,7 @@ async def clear_all_stores(user_id: str):
             await vector_store.close()
             results["vector_store"] = {"success": True, "deleted": vector_deleted}
         except Exception as e:
-            results["vector_store"] = {"success": False, "error": str(e)}
+            results["vector_store"] = {"success": False, "error": str(e)}  # type: ignore[dict-item]
 
         # Clear memory store
         try:
@@ -592,7 +598,7 @@ async def clear_all_stores(user_id: str):
 
             results["memory_store"] = {"success": True, "deleted": len(memories)}
         except Exception as e:
-            results["memory_store"] = {"success": False, "error": str(e)}
+            results["memory_store"] = {"success": False, "error": str(e)}  # type: ignore[dict-item]
 
         # Clear user cache (specific user only)
         try:
@@ -603,7 +609,7 @@ async def clear_all_stores(user_id: str):
             await user_manager.close()
             results["user_cache"] = {"success": True, "deleted": 1}
         except Exception as e:
-            results["user_cache"] = {"success": False, "error": str(e)}
+            results["user_cache"] = {"success": False, "error": str(e)}  # type: ignore[dict-item]
 
         add_error(f"ALL STORES CLEARED for user {user_id}")
 

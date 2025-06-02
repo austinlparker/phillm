@@ -3,6 +3,7 @@ from fastapi import FastAPI
 from dotenv import load_dotenv
 import uvicorn
 from loguru import logger
+from typing import AsyncGenerator, Dict, Any
 
 from phillm.slack.bot import SlackBot
 from phillm.api.routes import router
@@ -15,7 +16,7 @@ slack_bot = None
 
 
 @asynccontextmanager
-async def lifespan(app: FastAPI):
+async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     # Initialize OpenTelemetry only in the worker process
     telemetry.setup_telemetry()
 
@@ -28,7 +29,7 @@ async def lifespan(app: FastAPI):
 
     logger.info("🚀 Starting PhiLLM application...")
 
-    async def initialize_with_retries():
+    async def initialize_with_retries() -> None:
         max_attempts = 10
         retry_delay = 5
 
@@ -83,7 +84,7 @@ app.include_router(debug_router)
 
 # Add root-level health check for ALB
 @app.get("/health")
-async def root_health_check():
+async def root_health_check() -> Dict[str, Any]:
     """Root-level health check for load balancer"""
     try:
         # Import here to avoid circular imports

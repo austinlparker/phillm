@@ -1,6 +1,6 @@
 import os
 import hashlib
-from typing import List, Dict, Optional
+from typing import List, Dict, Optional, Any
 from datetime import datetime
 import redis.asyncio as redis
 import numpy as np
@@ -15,7 +15,7 @@ from phillm.telemetry import telemetry
 class RedisVectorStore:
     """Modern Redis vector store using RedisVL for semantic search"""
 
-    def __init__(self):
+    def __init__(self) -> None:
         self.redis_url = os.getenv("REDIS_URL", "redis://localhost:6379")
         self.redis_password = os.getenv("REDIS_PASSWORD")
 
@@ -63,7 +63,7 @@ class RedisVectorStore:
             }
         )
 
-    async def _ensure_redis_connection(self):
+    async def _ensure_redis_connection(self) -> None:
         """Ensure Redis connection is established and healthy"""
         if self._redis_healthy and self.redis_client and self.sync_redis_client:
             try:
@@ -97,8 +97,8 @@ class RedisVectorStore:
         )
 
         # Test the connections
-        await self.redis_client.ping()
-        self.sync_redis_client.ping()
+        await self.redis_client.ping()  # type: ignore[attr-defined]
+        self.sync_redis_client.ping()  # type: ignore[attr-defined]
 
         self._redis_healthy = True
         logger.info("✅ Redis connection established successfully")
@@ -113,7 +113,7 @@ class RedisVectorStore:
             self._redis_healthy = False
             return False
 
-    async def initialize_index(self):
+    async def initialize_index(self) -> None:
         """Initialize the vector search index"""
         # Ensure Redis connection first
         await self._ensure_redis_connection()
@@ -127,18 +127,18 @@ class RedisVectorStore:
         # Check if index exists, create if not (using sync operations)
         if not self._index_exists_sync():
             logger.info(f"Creating vector index: {self.index_name}")
-            self.index.create(overwrite=False)
+            self.index.create(overwrite=False)  # type: ignore[attr-defined]
             logger.info("✅ Vector index created successfully")
         else:
             logger.info(f"Vector index {self.index_name} already exists")
             # Connect to existing index
-            self.index.connect()
+            self.index.connect()  # type: ignore[attr-defined]
 
     def _index_exists_sync(self) -> bool:
         """Check if the vector index exists (sync version for initialization)"""
         try:
             # Check if index exists by looking for it in the index list
-            indices = self.sync_redis_client.execute_command("FT._LIST")
+            indices = self.sync_redis_client.execute_command("FT._LIST")  # type: ignore[attr-defined]
             # indices is a list of byte strings, so check for both string and bytes
             return (
                 (self.index_name in indices) or (self.index_name.encode() in indices)
@@ -151,7 +151,7 @@ class RedisVectorStore:
     async def _index_exists(self) -> bool:
         """Check if the vector index exists"""
         try:
-            await self.redis_client.ft(self.index_name).info()
+            await self.redis_client.ft(self.index_name).info()  # type: ignore[attr-defined]
             return True
         except Exception:
             return False
@@ -181,7 +181,7 @@ class RedisVectorStore:
         }
 
         # Store in Redis with new vector index prefix
-        await self.redis_client.hset(doc_key, mapping=message_data)
+        await self.redis_client.hset(doc_key, mapping=message_data)  # type: ignore[attr-defined]
 
         # Record metrics
         telemetry.record_message_scraped(channel_id, user_id)
@@ -195,7 +195,7 @@ class RedisVectorStore:
         user_id: str,
         limit: int = 5,
         threshold: float = 0.7,
-    ) -> List[Dict]:
+    ) -> List[Dict[str, Any]]:
         """Find similar messages using Redis vector search"""
         await self._ensure_redis_connection()
 
@@ -233,7 +233,7 @@ class RedisVectorStore:
         )
 
         # Execute search
-        results = self.index.query(vector_query)
+        results = self.index.query(vector_query)  # type: ignore[attr-defined]
 
         # Process results and apply threshold
         similar_messages = []
@@ -279,7 +279,7 @@ class RedisVectorStore:
         await self._ensure_redis_connection()
 
         # Use FT.SEARCH to count documents with user_id tag
-        result = await self.redis_client.execute_command(
+        result = await self.redis_client.execute_command(  # type: ignore[attr-defined]
             "FT.SEARCH",
             self.index_name,
             f"@user_id:{{{user_id}}}",
@@ -290,11 +290,11 @@ class RedisVectorStore:
         # First element is the count
         return int(result[0]) if result else 0
 
-    async def get_recent_messages(self, user_id: str, limit: int = 20) -> List[Dict]:
+    async def get_recent_messages(self, user_id: str, limit: int = 20) -> List[Dict[str, Any]]:
         """Get recent messages for a user using vector index"""
         try:
             # Use FT.SEARCH to get user messages sorted by timestamp (newest first)
-            result = await self.redis_client.execute_command(
+            result = await self.redis_client.execute_command(  # type: ignore[attr-defined]
                 "FT.SEARCH",
                 self.index_name,
                 f"@user_id:{{{user_id}}}",
@@ -348,8 +348,8 @@ class RedisVectorStore:
             return []
 
     async def get_oldest_stored_message(
-        self, user_id: str, channel_id: str = None
-    ) -> Optional[Dict]:
+        self, user_id: str, channel_id: Optional[str] = None
+    ) -> Optional[Dict[str, Any]]:
         """Get the oldest stored message for a user (optionally in a specific channel)"""
         try:
             # Build search query
@@ -358,7 +358,7 @@ class RedisVectorStore:
                 query += f" @channel_id:{{{channel_id}}}"
 
             # Search for oldest message (sorted by timestamp ascending)
-            result = await self.redis_client.execute_command(
+            result = await self.redis_client.execute_command(  # type: ignore[attr-defined]
                 "FT.SEARCH",
                 self.index_name,
                 query,
@@ -405,7 +405,7 @@ class RedisVectorStore:
             return None
 
     async def message_exists(
-        self, user_id: str, timestamp: str, channel_id: str = None
+        self, user_id: str, timestamp: str, channel_id: Optional[str] = None
     ) -> bool:
         """Check if a message already exists in the store by generating the expected message ID"""
         try:
@@ -416,7 +416,7 @@ class RedisVectorStore:
 
                 # Check if the document exists directly with new prefix
                 doc_key = f"msg:{message_id}"
-                exists = await self.redis_client.exists(doc_key)
+                exists = await self.redis_client.exists(doc_key)  # type: ignore[attr-defined]
                 return bool(exists)
 
             # If no channel_id provided, just return False for now
@@ -431,7 +431,7 @@ class RedisVectorStore:
         """Delete all messages for a user using vector index"""
         try:
             # First, get all document IDs for this user
-            result = await self.redis_client.execute_command(
+            result = await self.redis_client.execute_command(  # type: ignore[attr-defined]
                 "FT.SEARCH",
                 self.index_name,
                 f"@user_id:{{{user_id}}}",
@@ -446,7 +446,7 @@ class RedisVectorStore:
             # Skip count (first element) and delete each document
             for i in range(1, len(result)):
                 doc_id = result[i]
-                await self.redis_client.delete(doc_id)
+                await self.redis_client.delete(doc_id)  # type: ignore[attr-defined]
                 deleted_count += 1
 
             logger.info(f"Deleted {deleted_count} messages for user {user_id}")
@@ -460,10 +460,10 @@ class RedisVectorStore:
     async def save_scrape_state(
         self,
         channel_id: str,
-        cursor: str = None,
-        last_message_ts: str = None,
-        oldest_processed: str = None,
-    ):
+        cursor: Optional[str] = None,
+        last_message_ts: Optional[str] = None,
+        oldest_processed: Optional[str] = None,
+    ) -> None:
         """Save the current scraping state for a channel"""
         state_key = f"scrape_state:{channel_id}"
         state_data = {
@@ -472,13 +472,13 @@ class RedisVectorStore:
             "oldest_processed": oldest_processed or "",
             "updated_at": str(datetime.now().timestamp()),
         }
-        await self.redis_client.hset(state_key, mapping=state_data)
+        await self.redis_client.hset(state_key, mapping=state_data)  # type: ignore[attr-defined]
         logger.debug(f"Saved scrape state for channel {channel_id}: cursor={cursor}")
 
-    async def get_scrape_state(self, channel_id: str) -> dict:
+    async def get_scrape_state(self, channel_id: str) -> Dict[str, Any]:
         """Get the saved scraping state for a channel"""
         state_key = f"scrape_state:{channel_id}"
-        state_data = await self.redis_client.hgetall(state_key)
+        state_data = await self.redis_client.hgetall(state_key)  # type: ignore[attr-defined]
 
         if state_data:
             return {
@@ -494,10 +494,10 @@ class RedisVectorStore:
             "updated_at": None,
         }
 
-    async def clear_scrape_state(self, channel_id: str):
+    async def clear_scrape_state(self, channel_id: str) -> None:
         """Clear the scraping state for a channel"""
         state_key = f"scrape_state:{channel_id}"
-        await self.redis_client.delete(state_key)
+        await self.redis_client.delete(state_key)  # type: ignore[attr-defined]
         logger.info(f"Cleared scrape state for channel {channel_id}")
 
     def _generate_message_id(
@@ -507,6 +507,6 @@ class RedisVectorStore:
         content = f"{user_id}:{channel_id}:{timestamp}"
         return hashlib.md5(content.encode()).hexdigest()
 
-    async def close(self):
+    async def close(self) -> None:
         """Close Redis connection"""
-        await self.redis_client.close()
+        await self.redis_client.close()  # type: ignore[attr-defined]

@@ -99,7 +99,7 @@ class Memory:
 class ConversationMemory:
     """Manages conversation memory for users"""
 
-    def __init__(self):
+    def __init__(self) -> None:
         self.redis_url = os.getenv("REDIS_URL", "redis://localhost:6379")
         self.redis_password = os.getenv("REDIS_PASSWORD")
 
@@ -112,7 +112,7 @@ class ConversationMemory:
         self.memory_retention_days = int(os.getenv("MEMORY_RETENTION_DAYS", "30"))
         self.embedding_service = None  # Will be injected
 
-    def set_embedding_service(self, embedding_service):
+    def set_embedding_service(self, embedding_service: Any) -> None:
         """Inject embedding service for memory vectorization"""
         self.embedding_service = embedding_service
 
@@ -123,7 +123,7 @@ class ConversationMemory:
         content: str,
         context: Dict[str, Any],
         importance: MemoryImportance = MemoryImportance.MEDIUM,
-        pre_computed_embedding: list = None,
+        pre_computed_embedding: Optional[List[float]] = None,
     ) -> str:
         """Store a new memory"""
         tracer = get_tracer()
@@ -200,8 +200,8 @@ class ConversationMemory:
     async def recall_memories(
         self,
         user_id: str,
-        query: str = None,
-        memory_types: List[MemoryType] = None,
+        query: Optional[str] = None,
+        memory_types: Optional[List[MemoryType]] = None,
         limit: int = 10,
         min_relevance: float = 0.3,
     ) -> List[Memory]:
@@ -312,8 +312,8 @@ class ConversationMemory:
         user_message: str,
         bot_response: str,
         channel_id: str,
-        query_embedding: list = None,
-    ):
+        query_embedding: Optional[List[float]] = None,
+    ) -> None:
         """Store a DM interaction"""
         context = {
             "channel_id": channel_id,
@@ -340,8 +340,8 @@ class ConversationMemory:
         logger.debug(f"💾 Stored DM memory {memory_id} for user {user_id}")
 
     async def store_channel_interaction(
-        self, user_id: str, message: str, channel_id: str, channel_name: str = None
-    ):
+        self, user_id: str, message: str, channel_id: str, channel_name: Optional[str] = None
+    ) -> None:
         """Store a channel interaction"""
         context = {
             "channel_id": channel_id,
@@ -357,7 +357,7 @@ class ConversationMemory:
             importance=MemoryImportance.MEDIUM,
         )
 
-    async def store_user_preference(self, user_id: str, preference: str, value: str):
+    async def store_user_preference(self, user_id: str, preference: str, value: str) -> None:
         """Store a user preference or behavior pattern"""
         context = {"preference_type": preference, "value": value}
 
@@ -372,7 +372,7 @@ class ConversationMemory:
         )
 
     async def _get_user_memories(
-        self, user_id: str, memory_types: List[MemoryType] = None
+        self, user_id: str, memory_types: Optional[List[MemoryType]] = None
     ) -> List[Memory]:
         """Get all memories for a user, optionally filtered by type"""
         try:
@@ -445,7 +445,7 @@ class ConversationMemory:
             logger.error(f"Error getting user memories: {e}")
             return []
 
-    async def _update_memory_access(self, memory: Memory):
+    async def _update_memory_access(self, memory: Memory) -> None:
         """Update memory access statistics"""
         try:
             await self.redis_client.hset(
@@ -458,7 +458,7 @@ class ConversationMemory:
         except Exception as e:
             logger.error(f"Error updating memory access: {e}")
 
-    async def _cleanup_old_memories(self, user_id: str):
+    async def _cleanup_old_memories(self, user_id: str) -> None:
         """Clean up old, low-importance memories"""
         try:
             memories = await self._get_user_memories(user_id)
@@ -491,7 +491,7 @@ class ConversationMemory:
         except Exception as e:
             logger.error(f"Error cleaning up memories: {e}")
 
-    async def _delete_memory(self, memory_id: str, user_id: str):
+    async def _delete_memory(self, memory_id: str, user_id: str) -> None:
         """Delete a specific memory"""
         try:
             await self.redis_client.delete(f"memory:{memory_id}")
@@ -512,16 +512,16 @@ class ConversationMemory:
         norm2 = np.linalg.norm(vec2_np)
 
         if norm1 == 0 or norm2 == 0:
-            return 0
+            return 0.0
 
-        return dot_product / (norm1 * norm2)
+        return float(dot_product / (norm1 * norm2))
 
     async def get_memory_stats(self, user_id: str) -> Dict[str, Any]:
         """Get memory statistics for a user"""
         try:
             memories = await self._get_user_memories(user_id)
 
-            stats = {
+            stats: Dict[str, Any] = {
                 "total_memories": len(memories),
                 "by_type": {},
                 "by_importance": {},
@@ -568,6 +568,6 @@ class ConversationMemory:
             logger.error(f"Error getting memory stats: {e}")
             return {"error": str(e)}
 
-    async def close(self):
+    async def close(self) -> None:
         """Close Redis connection"""
         await self.redis_client.close()

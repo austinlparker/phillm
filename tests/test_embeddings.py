@@ -7,7 +7,6 @@ from phillm.ai.embeddings import EmbeddingService
 def embedding_service():
     with patch.dict("os.environ", {"OPENAI_API_KEY": "test-key"}):
         with (
-            patch("phillm.ai.embeddings.OpenAITextVectorizer"),
             patch("phillm.ai.embeddings.get_tracer") as mock_tracer,
             patch("phillm.ai.embeddings.telemetry"),
         ):

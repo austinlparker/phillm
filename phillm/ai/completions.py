@@ -1,25 +1,25 @@
 import os
 import time
-from typing import Optional
+from typing import Optional, List, Dict, Any
 import openai
 from loguru import logger
 from phillm.telemetry import get_tracer, telemetry
 
 
 class CompletionService:
-    def __init__(self):
+    def __init__(self) -> None:
         self.client = openai.AsyncOpenAI(api_key=os.getenv("OPENAI_API_KEY"))
         self.model = os.getenv("OPENAI_MODEL", "gpt-4.1-mini")  # Configurable model
 
     async def generate_response(
         self,
         query: str,
-        similar_messages: list,
+        similar_messages: List[Dict[str, Any]],
         user_id: str,
         is_dm: bool = False,
         temperature: float = 0.8,
-        conversation_context: str = None,
-        requester_display_name: str = None,
+        conversation_context: Optional[str] = None,
+        requester_display_name: Optional[str] = None,
     ) -> str:
         tracer = get_tracer()
         start_time = time.time()
@@ -115,7 +115,7 @@ class CompletionService:
                     presence_penalty=0.1,  # Light penalty to maintain style consistency
                 )
 
-                generated_response = response.choices[0].message.content
+                generated_response = response.choices[0].message.content or ""
 
                 duration = time.time() - start_time
 
@@ -143,11 +143,11 @@ class CompletionService:
     def _build_system_prompt(
         self,
         user_id: str,
-        similar_messages: list,
+        similar_messages: List[Dict[str, Any]],
         query: str,
         is_dm: bool = False,
-        conversation_context: str = None,
-        requester_display_name: str = None,
+        conversation_context: Optional[str] = None,
+        requester_display_name: Optional[str] = None,
     ) -> str:
         """Build prompt using many-shot in-context learning with actual examples"""
 
@@ -243,7 +243,6 @@ Respond exactly as Phillip would:"""
 
         return prompt
 
-    # Old style analysis methods removed - now using many-shot learning approach
 
     async def generate_scheduled_message(
         self, context: str, user_id: str, topic: Optional[str] = None
@@ -258,7 +257,7 @@ Respond exactly as Phillip would:"""
                 max_tokens=300,
             )
 
-            generated_message = response.choices[0].message.content
+            generated_message = response.choices[0].message.content or ""
             logger.info(f"Generated scheduled message for user {user_id}")
 
             return generated_message

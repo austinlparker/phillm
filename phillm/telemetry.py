@@ -42,7 +42,7 @@ from opentelemetry.instrumentation.openai_v2 import OpenAIInstrumentor
 class TelemetryConfig:
     """OpenTelemetry configuration for PhiLLM"""
 
-    def __init__(self):
+    def __init__(self) -> None:
         self.service_name = "phillm"
         self.service_version = "0.1.0"
         self.honeycomb_api_key = os.getenv("HONEYCOMB_API_KEY")
@@ -55,14 +55,14 @@ class TelemetryConfig:
         self.logger: Optional[_logs.Logger] = None
 
         # Custom metrics
-        self.embedding_counter = None
-        self.completion_counter = None
-        self.similarity_search_counter = None
-        self.dm_counter = None
-        self.scraping_counter = None
-        self.response_time_histogram = None
-        self.embedding_time_histogram = None
-        self.similarity_score_histogram = None
+        self.embedding_counter: Optional[metrics.Counter] = None
+        self.completion_counter: Optional[metrics.Counter] = None
+        self.similarity_search_counter: Optional[metrics.Counter] = None
+        self.dm_counter: Optional[metrics.Counter] = None
+        self.scraping_counter: Optional[metrics.Counter] = None
+        self.response_time_histogram: Optional[metrics.Histogram] = None
+        self.embedding_time_histogram: Optional[metrics.Histogram] = None
+        self.similarity_score_histogram: Optional[metrics.Histogram] = None
 
     def setup_telemetry(self) -> bool:
         """Initialize OpenTelemetry with Honeycomb export (if API key available)"""
@@ -162,7 +162,7 @@ class TelemetryConfig:
             self._setup_fallback_telemetry()
             return False
 
-    def _setup_fallback_telemetry(self):
+    def _setup_fallback_telemetry(self) -> None:
         """Setup basic telemetry if main setup fails"""
         try:
             # Minimal tracer setup
@@ -185,7 +185,7 @@ class TelemetryConfig:
         except Exception as e:
             logger.error(f"Even fallback telemetry failed: {e}")
 
-    def _setup_tracing(self, resource: Resource):
+    def _setup_tracing(self, resource: Resource) -> None:
         """Configure tracing with OTLP export to Honeycomb (if API key available)"""
         # Check if we should skip setup
         try:
@@ -220,7 +220,7 @@ class TelemetryConfig:
         trace.set_tracer_provider(trace_provider)
         self.tracer = trace.get_tracer(self.service_name, self.service_version)
 
-    def _setup_metrics(self, resource: Resource):
+    def _setup_metrics(self, resource: Resource) -> None:
         """Configure metrics with OTLP export to Honeycomb (if API key available)"""
         # Check if we should skip setup
         try:
@@ -262,7 +262,7 @@ class TelemetryConfig:
         metrics.set_meter_provider(metric_provider)
         self.meter = metrics.get_meter(self.service_name, self.service_version)
 
-    def _setup_logging(self, resource: Resource):
+    def _setup_logging(self, resource: Resource) -> None:
         """Configure logging with OTLP export to Honeycomb (if API key available)"""
         # Check if we should skip setup
         try:
@@ -309,7 +309,7 @@ class TelemetryConfig:
             root_logger.addHandler(handler)
             root_logger.setLevel(logging.INFO)
 
-    def _setup_event_logging(self, resource: Resource):
+    def _setup_event_logging(self, resource: Resource) -> None:
         """Configure event logging for OpenTelemetry events (required for OpenAI span events)"""
         try:
             # Check if we should skip setup
@@ -329,7 +329,7 @@ class TelemetryConfig:
 
         logger.debug("🔭 Event logger provider configured for OpenAI span events")
 
-    def _setup_auto_instrumentation(self):
+    def _setup_auto_instrumentation(self) -> None:
         """Setup automatic instrumentation for common libraries"""
         try:
             # Check if already instrumented to avoid conflicts
@@ -359,28 +359,16 @@ class TelemetryConfig:
             if not getattr(OpenAIInstrumentor, "_is_instrumented", False):
                 OpenAIInstrumentor().instrument()
 
-            # Debug: Check if the environment variable is set correctly
-            genai_capture = os.getenv(
-                "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT", "not_set"
-            )
             logger.info(
                 "🔧 Auto-instrumentation enabled for FastAPI, HTTP clients, Redis, and OpenAI"
             )
-            logger.info(
-                f"🔧 OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT = {genai_capture}"
-            )
-
-            # Test if events are being captured locally
-            from opentelemetry.instrumentation.openai_v2.utils import is_content_enabled
-
-            logger.info(f"🔧 is_content_enabled() = {is_content_enabled()}")
 
         except Exception as e:
             logger.warning(
                 f"Some auto-instrumentation failed (this is normal in dev mode): {e}"
             )
 
-    def _setup_custom_metrics(self):
+    def _setup_custom_metrics(self) -> None:
         """Setup custom business metrics"""
         if not self.meter:
             return
@@ -437,7 +425,7 @@ class TelemetryConfig:
 
         logger.info("📊 Custom metrics initialized")
 
-    def record_embedding_created(self, text_length: int, duration: float):
+    def record_embedding_created(self, text_length: int, duration: float) -> None:
         """Record embedding creation metrics"""
         try:
             if self.embedding_counter:
@@ -455,7 +443,7 @@ class TelemetryConfig:
         response_length: int,
         duration: float,
         temperature: float,
-    ):
+    ) -> None:
         """Record completion generation metrics"""
         try:
             if self.completion_counter:
@@ -473,7 +461,7 @@ class TelemetryConfig:
 
     def record_similarity_search(
         self, query_length: int, results_count: int, threshold: float, max_score: float
-    ):
+    ) -> None:
         """Record similarity search metrics"""
         try:
             if self.similarity_search_counter:
@@ -489,7 +477,7 @@ class TelemetryConfig:
         except Exception as e:
             logger.debug(f"Failed to record similarity search metrics: {e}")
 
-    def record_dm_processed(self, user_id: str, response_length: int):
+    def record_dm_processed(self, user_id: str, response_length: int) -> None:
         """Record DM processing metrics"""
         try:
             if self.dm_counter:
@@ -505,7 +493,7 @@ class TelemetryConfig:
         except Exception as e:
             logger.debug(f"Failed to record DM metrics: {e}")
 
-    def record_message_scraped(self, channel_id: str, user_id: str):
+    def record_message_scraped(self, channel_id: str, user_id: str) -> None:
         """Record message scraping metrics"""
         try:
             if self.scraping_counter:
@@ -563,11 +551,3 @@ def get_tracer() -> trace.Tracer:
     return trace.get_tracer(__name__)
 
 
-def get_meter() -> Optional[metrics.Meter]:
-    """Get the global meter instance"""
-    return telemetry.meter
-
-
-def get_logger() -> Optional[_logs.Logger]:
-    """Get the global logger instance"""
-    return telemetry.logger

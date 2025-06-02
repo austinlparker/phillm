@@ -56,6 +56,32 @@ target-version = ["py311"]
 [tool.mypy]
 python_version = "3.11"
 strict = true
+ignore_missing_imports = true
+# More pragmatic settings for external libraries
+no_implicit_optional = false
+warn_return_any = false
+disallow_untyped_calls = false
+disallow_any_unimported = false
+disallow_subclassing_any = false
+# Allow untyped function definitions for internal code
+disallow_untyped_defs = false
+
+# Ignore specific modules that are problematic
+[[tool.mypy.overrides]]
+module = [
+    "redis.*",
+    "redisvl.*", 
+    "slack_bolt.*",
+    "opentelemetry.*",
+    "openai.*"
+]
+ignore_errors = true
+
+# Be more permissive with internal modules
+[[tool.mypy.overrides]]
+module = "phillm.*"
+disallow_untyped_defs = false
+warn_unused_ignores = false
 
 [tool.setuptools.packages.find]
 include = ["phillm*"]

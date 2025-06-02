@@ -2,7 +2,7 @@ import pytest
 from unittest.mock import MagicMock, patch
 import os
 
-from phillm.telemetry import TelemetryConfig, get_tracer, get_meter, get_logger
+from phillm.telemetry import TelemetryConfig, get_tracer
 
 
 @pytest.fixture
@@ -136,13 +136,9 @@ def test_get_results_bucket(telemetry_config):
 def test_global_functions():
     # Test that global functions work without errors
     tracer = get_tracer()
-    meter = get_meter()
-    logger = get_logger()
 
     # These might be None if telemetry isn't set up, which is fine
-    assert tracer is not None or tracer is None
-    assert meter is not None or meter is None
-    assert logger is not None or logger is None
+    assert tracer is not None
 
 
 @patch("phillm.telemetry.FastAPIInstrumentor")

@@ -1,5 +1,5 @@
 import os
-from typing import Optional, Union
+from typing import Optional
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -547,36 +547,16 @@ class TelemetryConfig:
             return "lots"
 
 
-class NoopSpan:
-    """A no-operation span that does nothing"""
-    def set_attribute(self, key: str, value) -> None:
-        pass
-    
-    def set_status(self, status) -> None:
-        pass
-    
-    def __enter__(self):
-        return self
-    
-    def __exit__(self, exc_type, exc_val, exc_tb):
-        pass
-
-
-class NoopTracer:
-    """A no-operation tracer for when telemetry is disabled"""
-    def start_as_current_span(self, name: str, **kwargs):
-        return NoopSpan()
-
-
 # Global telemetry instance
 telemetry = TelemetryConfig()
 
 
-def get_tracer() -> Union[trace.Tracer, NoopTracer]:
-    """Get the global tracer instance, or a noop tracer if not initialized"""
+def get_tracer() -> trace.Tracer:
+    """Get the global tracer instance, or the default noop tracer if not initialized"""
     if telemetry.tracer:
         return telemetry.tracer
-    return NoopTracer()
+    # OpenTelemetry's default tracer is a noop when no provider is set
+    return trace.get_tracer(__name__)
 
 
 def get_meter() -> Optional[metrics.Meter]:

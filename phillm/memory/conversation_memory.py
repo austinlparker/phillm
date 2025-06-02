@@ -480,7 +480,7 @@ class ConversationMemory:
             ]
 
             # Delete old memories
-            for memory, _ in to_delete:
+            for memory in to_delete:
                 await self._delete_memory(memory.memory_id, user_id)
 
             if to_delete:

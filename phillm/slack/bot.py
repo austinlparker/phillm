@@ -965,3 +965,6 @@ class SlackBot:
     async def stop(self):
         logger.info("Stopping Slack bot...")
         await self.handler.close_async()
+        await self.vector_store.close()
+        await self.memory.close()
+        await self.user_manager.close()

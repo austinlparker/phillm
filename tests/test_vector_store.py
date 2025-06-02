@@ -34,6 +34,10 @@ def vector_store():
 async def test_store_message_success(vector_store):
     embedding = [0.1, 0.2, 0.3]
 
+    # Mock the async methods
+    vector_store._ensure_redis_connection = AsyncMock()
+    vector_store.redis_client.hset = AsyncMock()
+
     result = await vector_store.store_message(
         user_id="U123",
         channel_id="C123",
@@ -69,6 +73,9 @@ async def test_find_similar_messages_with_text_query(vector_store):
         mock_service = AsyncMock()
         mock_service.create_embedding.return_value = [0.1, 0.2, 0.3]
         mock_embedding_service.return_value = mock_service
+
+        # Mock async methods
+        vector_store._ensure_redis_connection = AsyncMock()
 
         # Mock RedisVL SearchIndex query results
         mock_results = [
@@ -109,8 +116,11 @@ async def test_find_similar_messages_with_text_query(vector_store):
 
 @pytest.mark.asyncio
 async def test_get_user_message_count(vector_store):
+    # Mock async methods
+    vector_store._ensure_redis_connection = AsyncMock()
+    
     # Mock FT.SEARCH response - first element is count
-    vector_store.redis_client.execute_command.return_value = [42]
+    vector_store.redis_client.execute_command = AsyncMock(return_value=[42])
 
     count = await vector_store.get_user_message_count("U123")
 
@@ -122,9 +132,12 @@ async def test_get_user_message_count(vector_store):
 
 @pytest.mark.asyncio
 async def test_get_recent_messages(vector_store):
+    # Mock async methods
+    vector_store._ensure_redis_connection = AsyncMock()
+    
     # Mock FT.SEARCH response with SORTBY timestamp DESC
     # Format: [count, doc_id1, [field1, value1, field2, value2], doc_id2, [field3, value3, field4, value4]]
-    vector_store.redis_client.execute_command.return_value = [
+    vector_store.redis_client.execute_command = AsyncMock(return_value=[
         2,  # count
         "msg:newer_id",
         [
@@ -148,7 +161,7 @@ async def test_get_recent_messages(vector_store):
             "message_id",
             "older_id",
         ],
-    ]
+    ])
 
     messages = await vector_store.get_recent_messages("U123", limit=10)
 
@@ -230,6 +243,9 @@ def test_generate_message_id(vector_store):
 async def test_find_similar_messages_with_embedding_vector(vector_store):
     # Test with direct embedding vector instead of text query
     query_embedding = [0.1, 0.2, 0.3]
+
+    # Mock async methods
+    vector_store._ensure_redis_connection = AsyncMock()
 
     # Mock RedisVL SearchIndex query results
     mock_results = [

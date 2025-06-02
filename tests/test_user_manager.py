@@ -48,17 +48,18 @@ async def test_get_user_display_name_cached(user_manager):
 @pytest.mark.asyncio
 async def test_get_user_display_name_api_call(user_manager):
     # Mock no cache
-    user_manager.redis_client.hgetall.return_value = {}
+    user_manager.redis_client.hgetall = AsyncMock(return_value={})
+    user_manager.redis_client.hset = AsyncMock()
 
     # Mock Slack API response
-    user_manager.slack_client.users_info.return_value = {
+    user_manager.slack_client.users_info = AsyncMock(return_value={
         "user": {
             "profile": {
                 "display_name": "API User",
                 "real_name": "API Real User",
             }
         }
-    }
+    })
 
     result = await user_manager.get_user_display_name("U123")
     assert result == "API User"
@@ -70,17 +71,18 @@ async def test_get_user_display_name_api_call(user_manager):
 @pytest.mark.asyncio
 async def test_get_user_display_name_fallback_to_real_name(user_manager):
     # Mock no cache
-    user_manager.redis_client.hgetall.return_value = {}
+    user_manager.redis_client.hgetall = AsyncMock(return_value={})
+    user_manager.redis_client.hset = AsyncMock()
 
     # Mock Slack API response with empty display_name
-    user_manager.slack_client.users_info.return_value = {
+    user_manager.slack_client.users_info = AsyncMock(return_value={
         "user": {
             "profile": {
                 "display_name": "",
                 "real_name": "Real Name Only",
             }
         }
-    }
+    })
 
     result = await user_manager.get_user_display_name("U123")
     assert result == "Real Name Only"
@@ -89,17 +91,17 @@ async def test_get_user_display_name_fallback_to_real_name(user_manager):
 @pytest.mark.asyncio
 async def test_get_user_display_name_fallback_to_user_id(user_manager):
     # Mock no cache
-    user_manager.redis_client.hgetall.return_value = {}
+    user_manager.redis_client.hgetall = AsyncMock(return_value={})
 
     # Mock Slack API response with no names
-    user_manager.slack_client.users_info.return_value = {
+    user_manager.slack_client.users_info = AsyncMock(return_value={
         "user": {
             "profile": {
                 "display_name": "",
                 "real_name": "",
             }
         }
-    }
+    })
 
     result = await user_manager.get_user_display_name("U123")
     assert result == "U123"
@@ -108,7 +110,7 @@ async def test_get_user_display_name_fallback_to_user_id(user_manager):
 @pytest.mark.asyncio
 async def test_get_user_display_name_api_error(user_manager):
     # Mock no cache
-    user_manager.redis_client.hgetall.return_value = {}
+    user_manager.redis_client.hgetall = AsyncMock(return_value={})
 
     # Mock Slack API error
     user_manager.slack_client.users_info.side_effect = Exception("API Error")
@@ -140,10 +142,10 @@ async def test_get_user_info_cached(user_manager):
 @pytest.mark.asyncio
 async def test_get_user_info_api_call(user_manager):
     # Mock no cache
-    user_manager.redis_client.hgetall.return_value = {}
+    user_manager.redis_client.hgetall = AsyncMock(return_value={})
 
     # Mock Slack API response
-    user_manager.slack_client.users_info.return_value = {
+    user_manager.slack_client.users_info = AsyncMock(return_value={
         "user": {
             "profile": {
                 "display_name": "API User",
@@ -153,7 +155,7 @@ async def test_get_user_info_api_call(user_manager):
                 "phone": "987-654-3210",
             }
         }
-    }
+    })
 
     result = await user_manager.get_user_info("U123")
 
@@ -204,14 +206,14 @@ async def test_cache_expiry_check(user_manager):
     }
 
     # Mock fresh API call
-    user_manager.slack_client.users_info.return_value = {
+    user_manager.slack_client.users_info = AsyncMock(return_value={
         "user": {
             "profile": {
                 "display_name": "Fresh User",
                 "real_name": "Fresh Real User",
             }
         }
-    }
+    })
 
     result = await user_manager.get_user_display_name("U123")
 
@@ -236,10 +238,10 @@ def test_cache_key_format():
 @pytest.mark.asyncio
 async def test_get_user_info_with_none_values(user_manager):
     # Mock no cache
-    user_manager.redis_client.hgetall.return_value = {}
+    user_manager.redis_client.hgetall = AsyncMock(return_value={})
 
     # Mock Slack API response with None/missing values
-    user_manager.slack_client.users_info.return_value = {
+    user_manager.slack_client.users_info = AsyncMock(return_value={
         "user": {
             "profile": {
                 "display_name": "User",
@@ -247,7 +249,7 @@ async def test_get_user_info_with_none_values(user_manager):
                 # Missing email, title, phone
             }
         }
-    }
+    })
 
     result = await user_manager.get_user_info("U123")
 
@@ -260,15 +262,15 @@ async def test_get_user_info_with_none_values(user_manager):
 @pytest.mark.asyncio
 async def test_concurrent_cache_access(user_manager):
     # Test that concurrent access doesn't cause issues
-    user_manager.redis_client.hgetall.return_value = {}
-    user_manager.slack_client.users_info.return_value = {
+    user_manager.redis_client.hgetall = AsyncMock(return_value={})
+    user_manager.slack_client.users_info = AsyncMock(return_value={
         "user": {
             "profile": {
                 "display_name": "Concurrent User",
                 "real_name": "Concurrent Real User",
             }
         }
-    }
+    })
 
     # Simulate concurrent calls
     import asyncio

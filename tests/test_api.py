@@ -8,14 +8,38 @@ app.include_router(router)
 client = TestClient(app)
 
 
-def test_health_check():
-    response = client.get("/health")
-    assert response.status_code == 200
-    assert response.json() == {
-        "status": "healthy",
-        "service": "PhiLLM",
-        "redis": "connected",
-    }
+def test_health_check_redis_healthy():
+    # Test business logic: health endpoint response when Redis is healthy
+    with patch("phillm.api.routes.RedisVectorStore") as mock_vector_store:
+        mock_instance = AsyncMock()
+        mock_instance.health_check.return_value = True
+        mock_vector_store.return_value = mock_instance
+        
+        response = client.get("/health")
+        assert response.status_code == 200
+        assert response.json() == {
+            "status": "healthy",
+            "service": "PhiLLM", 
+            "redis": "connected",
+        }
+
+
+def test_health_check_redis_unhealthy():
+    # Test business logic: health endpoint response when Redis is unhealthy
+    with patch("phillm.api.routes.RedisVectorStore") as mock_vector_store:
+        mock_instance = AsyncMock()
+        mock_instance.health_check.return_value = False
+        mock_vector_store.return_value = mock_instance
+        
+        response = client.get("/health")
+        assert response.status_code == 503
+        assert response.json() == {
+            "detail": {
+                "status": "unhealthy",
+                "service": "PhiLLM",
+                "redis": "disconnected",
+            }
+        }
 
 
 @patch("phillm.api.routes.RedisVectorStore")

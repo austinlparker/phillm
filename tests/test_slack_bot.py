@@ -80,11 +80,11 @@ async def test_handle_direct_message_event(slack_bot):
 async def test_generate_ai_response(slack_bot):
     query = "How are you?"
 
-    # Mock embedding service
-    with patch("phillm.slack.bot.EmbeddingService") as mock_embedding_service:
-        mock_service = AsyncMock()
-        mock_service.create_embedding.return_value = [0.1, 0.2, 0.3]
-        mock_embedding_service.return_value = mock_service
+    # Mock the EmbeddingService import within the method - need to patch at module level
+    with patch("phillm.ai.embeddings.EmbeddingService") as mock_embedding_service_class:
+        mock_embedding_service = AsyncMock()
+        mock_embedding_service.create_embedding.return_value = [0.1, 0.2, 0.3]
+        mock_embedding_service_class.return_value = mock_embedding_service
 
         # Mock async methods
         slack_bot.vector_store.find_similar_messages = AsyncMock(
@@ -96,19 +96,25 @@ async def test_generate_ai_response(slack_bot):
 
         response, embedding = await slack_bot._generate_ai_response(query)
 
+        # Test business logic: response generation and embedding creation
         assert response == "I'm doing well!"
         assert embedding == [0.1, 0.2, 0.3]
+        
+        # Verify that the services were called as expected
+        mock_embedding_service.create_embedding.assert_called_once_with(query)
+        slack_bot.vector_store.find_similar_messages.assert_called()
+        slack_bot.completion_service.generate_response.assert_called_once()
 
 
 @pytest.mark.asyncio
 async def test_generate_ai_response_with_fallback(slack_bot):
     query = "How are you?"
 
-    # Mock embedding service
-    with patch("phillm.slack.bot.EmbeddingService") as mock_embedding_service:
-        mock_service = AsyncMock()
-        mock_service.create_embedding.return_value = [0.1, 0.2, 0.3]
-        mock_embedding_service.return_value = mock_service
+    # Mock the EmbeddingService import within the method - need to patch at module level
+    with patch("phillm.ai.embeddings.EmbeddingService") as mock_embedding_service_class:
+        mock_embedding_service = AsyncMock()
+        mock_embedding_service.create_embedding.return_value = [0.1, 0.2, 0.3]
+        mock_embedding_service_class.return_value = mock_embedding_service
 
         # No similar messages found, should use recent messages fallback
         slack_bot.vector_store.find_similar_messages = AsyncMock(side_effect=[[], []])
@@ -121,7 +127,9 @@ async def test_generate_ai_response_with_fallback(slack_bot):
 
         response, embedding = await slack_bot._generate_ai_response(query)
 
+        # Test business logic: fallback behavior when no similar messages found
         assert response == "Fallback response"
+        assert embedding == [0.1, 0.2, 0.3]
         slack_bot.vector_store.get_recent_messages.assert_called()
 
 

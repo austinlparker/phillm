@@ -1,7 +1,7 @@
 import os
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
-from typing import List, Optional
+from typing import List, Optional, Dict, Any
 from loguru import logger
 
 from phillm.vector.redis_vector_store import RedisVectorStore
@@ -18,7 +18,7 @@ class QueryRequest(BaseModel):
 
 class QueryResponse(BaseModel):
     response: str
-    similar_messages: List[dict]
+    similar_messages: List[Dict[str, Any]]
 
 
 class MessageCountResponse(BaseModel):
@@ -28,11 +28,11 @@ class MessageCountResponse(BaseModel):
 
 class RecentMessagesResponse(BaseModel):
     user_id: str
-    messages: List[dict]
+    messages: List[Dict[str, Any]]
 
 
 @router.get("/health")
-async def health_check():
+async def health_check() -> Dict[str, Any]:
     try:
         # Test Redis connection
         vector_store = RedisVectorStore()
@@ -42,21 +42,29 @@ async def health_check():
         if redis_healthy:
             return {"status": "healthy", "service": "PhiLLM", "redis": "connected"}
         else:
-            return {"status": "unhealthy", "service": "PhiLLM", "redis": "disconnected"}
+            raise HTTPException(
+                status_code=503,
+                detail={"status": "unhealthy", "service": "PhiLLM", "redis": "disconnected"}
+            )
+    except HTTPException:
+        raise  # Re-raise HTTPException to preserve status code
     except Exception as e:
         logger.error(f"Health check failed: {e}")
-        return {"status": "unhealthy", "service": "PhiLLM", "error": str(e)}
+        raise HTTPException(
+            status_code=503,
+            detail={"status": "unhealthy", "service": "PhiLLM", "error": str(e)}
+        )
 
 
 @router.post("/query", response_model=QueryResponse)
-async def query_ai_twin(request: QueryRequest):
+async def query_ai_twin(request: QueryRequest) -> QueryResponse:
     try:
         vector_store = RedisVectorStore()
         completion_service = CompletionService()
 
         # Find similar messages
         similar_messages = await vector_store.find_similar_messages(
-            request.query, user_id=request.user_id, limit=request.limit
+            request.query, user_id=request.user_id, limit=request.limit or 5
         )
 
         if not similar_messages:
@@ -81,7 +89,7 @@ async def query_ai_twin(request: QueryRequest):
 
 
 @router.get("/users/{user_id}/messages/count", response_model=MessageCountResponse)
-async def get_user_message_count(user_id: str):
+async def get_user_message_count(user_id: str) -> MessageCountResponse:
     try:
         vector_store = RedisVectorStore()
         count = await vector_store.get_user_message_count(user_id)
@@ -95,7 +103,7 @@ async def get_user_message_count(user_id: str):
 
 
 @router.get("/users/{user_id}/messages/recent", response_model=RecentMessagesResponse)
-async def get_recent_messages(user_id: str, limit: int = 20):
+async def get_recent_messages(user_id: str, limit: int = 20) -> RecentMessagesResponse:
     try:
         vector_store = RedisVectorStore()
         messages = await vector_store.get_recent_messages(user_id, limit)
@@ -109,7 +117,7 @@ async def get_recent_messages(user_id: str, limit: int = 20):
 
 
 @router.delete("/users/{user_id}/messages")
-async def delete_user_messages(user_id: str):
+async def delete_user_messages(user_id: str) -> Dict[str, Any]:
     try:
         vector_store = RedisVectorStore()
         deleted_count = await vector_store.delete_user_messages(user_id)
@@ -127,7 +135,7 @@ async def delete_user_messages(user_id: str):
 
 
 @router.get("/scraping/status/{channel_id}")
-async def get_scraping_status(channel_id: str):
+async def get_scraping_status(channel_id: str) -> Dict[str, Any]:
     """Get scraping status for a channel"""
     try:
         vector_store = RedisVectorStore()
@@ -146,7 +154,7 @@ async def get_scraping_status(channel_id: str):
 
 
 @router.post("/scraping/reset/{channel_id}")
-async def reset_scraping_state(channel_id: str):
+async def reset_scraping_state(channel_id: str) -> Dict[str, Any]:
     """Reset scraping state for a channel (start from beginning)"""
     try:
         vector_store = RedisVectorStore()
@@ -164,7 +172,7 @@ async def reset_scraping_state(channel_id: str):
 
 
 @router.get("/scraping/completeness/{channel_id}")
-async def check_scraping_completeness(channel_id: str, detailed: bool = False):
+async def check_scraping_completeness(channel_id: str, detailed: bool = False) -> Dict[str, Any]:
     """Check if we have scraped all available message history for the target user in a channel"""
     try:
         from phillm.slack.bot import SlackBot
@@ -227,7 +235,7 @@ class ChatResponse(BaseModel):
 
 
 @router.get("/debug/vector-search")
-async def debug_vector_search():
+async def debug_vector_search() -> Dict[str, Any]:
     """Debug vector similarity search"""
     try:
         from phillm.slack.bot import SlackBot
@@ -237,7 +245,7 @@ async def debug_vector_search():
         target_user_id = os.getenv("TARGET_USER_ID")
 
         # Get total message count
-        total_messages = await bot.vector_store.get_user_message_count(target_user_id)
+        total_messages = await bot.vector_store.get_user_message_count(target_user_id or "")
 
         # Test search with different thresholds
         test_query = "mcdonalds"
@@ -245,7 +253,7 @@ async def debug_vector_search():
 
         for threshold in [0.0, 0.3, 0.5, 0.7, 0.9]:
             similar = await bot.vector_store.find_similar_messages(
-                test_query, user_id=target_user_id, limit=3, threshold=threshold
+                test_query, user_id=target_user_id or "", limit=3, threshold=threshold
             )
             results[f"threshold_{threshold}"] = {
                 "count": len(similar),
@@ -261,7 +269,7 @@ async def debug_vector_search():
             }
 
         # Get a few recent messages to verify storage
-        recent = await bot.vector_store.get_recent_messages(target_user_id, limit=5)
+        recent = await bot.vector_store.get_recent_messages(target_user_id or "", limit=5)
 
         return {
             "target_user_id": target_user_id,
@@ -284,27 +292,28 @@ async def debug_vector_search():
 
 
 @router.get("/slack/test-dm-access")
-async def test_dm_access():
+async def test_dm_access() -> Dict[str, Any]:
     """Test if bot can access DM conversations and check detailed permissions"""
     try:
         from phillm.slack.bot import SlackBot
 
         bot = SlackBot()
 
-        results = {}
+        results: Dict[str, Any] = {}
 
         # Try to list conversations (including DMs)
         try:
             conversations = await bot.app.client.conversations_list(types="im")
-            dm_count = len(conversations.get("channels", []))
+            ch: List[Dict[str, Any]] = conversations.get("channels", [])  # type: ignore[assignment]
+            dm_count = len(ch)
             results["dm_conversations_found"] = dm_count
             results["dm_channels"] = [
                 {
-                    "id": ch.get("id"),
-                    "user": ch.get("user"),
-                    "created": ch.get("created"),
+                    "id": channel.get("id"),
+                    "user": channel.get("user"),
+                    "created": channel.get("created"),
                 }
-                for ch in conversations.get("channels", [])[:5]  # Show first 5
+                for channel in ch[:5]  # Show first 5
             ]
         except Exception as e:
             results["dm_list_error"] = str(e)
@@ -312,32 +321,36 @@ async def test_dm_access():
         # Try to get bot info and team info for scopes
         try:
             auth_info = await bot.app.client.auth_test()
-            results["bot_user_id"] = auth_info.get("user_id")
-            results["team_id"] = auth_info.get("team_id")
+            bot_user_id = auth_info.get("user_id")  # type: ignore[assignment]
+            team_id = auth_info.get("team_id")  # type: ignore[assignment]
+            results["bot_user_id"] = bot_user_id
+            results["team_id"] = team_id
 
             # Try to get team info which sometimes includes scopes
-            team_info = await bot.app.client.team_info()
+            team_info = await bot.app.client.team_info()  # type: ignore[assignment]
             results["team_info"] = team_info
         except Exception as e:
             results["auth_error"] = str(e)
 
         # Test if we can actually read a DM conversation
-        if results.get("dm_channels"):
+        dm_channels_list = results.get("dm_channels")
+        if dm_channels_list:
             try:
-                dm_id = results["dm_channels"][0]["id"]
+                dm_id = dm_channels_list[0]["id"]  # type: ignore[index]
                 history = await bot.app.client.conversations_history(
                     channel=dm_id, limit=1
                 )
                 results["can_read_dm_history"] = True
-                results["dm_history_sample"] = len(history.get("messages", []))
+                dm_history_sample = len(history.get("messages", []))  # type: ignore[assignment]
+                results["dm_history_sample"] = dm_history_sample
             except Exception as e:
                 results["dm_history_error"] = str(e)
                 results["can_read_dm_history"] = False
 
         # Test sending a message to a DM (we'll catch the error to see what permission we're missing)
-        if results.get("dm_channels"):
+        if dm_channels_list:
             try:
-                dm_id = results["dm_channels"][0]["id"]
+                dm_id = dm_channels_list[0]["id"]  # type: ignore[index]
                 # Don't actually send, just test the API call structure
                 results["can_post_to_dm"] = "not_tested"  # We don't want to spam
             except Exception as e:
@@ -350,7 +363,7 @@ async def test_dm_access():
 
 
 @router.post("/chat", response_model=ChatResponse)
-async def chat_with_ai_twin(request: ChatRequest):
+async def chat_with_ai_twin(request: ChatRequest) -> ChatResponse:
     """Chat with the AI twin directly via API (simulates DM)"""
     try:
         from phillm.memory import ConversationMemory
@@ -418,7 +431,7 @@ async def chat_with_ai_twin(request: ChatRequest):
 
 
 @router.get("/memory/{user_id}/stats")
-async def get_user_memory_stats(user_id: str):
+async def get_user_memory_stats(user_id: str) -> Dict[str, Any]:
     """Get memory statistics for a user"""
     try:
         from phillm.memory import ConversationMemory
@@ -436,8 +449,8 @@ async def get_user_memory_stats(user_id: str):
 
 @router.get("/memory/{user_id}/recall")
 async def recall_user_memories(
-    user_id: str, query: str = None, limit: int = 10, min_relevance: float = 0.3
-):
+    user_id: str, query: Optional[str] = None, limit: int = 10, min_relevance: float = 0.3
+) -> Dict[str, Any]:
     """Recall memories for a user"""
     try:
         from phillm.memory import ConversationMemory
@@ -482,7 +495,7 @@ async def recall_user_memories(
 
 
 @router.get("/memory/{user_id}/context")
-async def get_conversation_context(user_id: str, limit: int = 5):
+async def get_conversation_context(user_id: str, limit: int = 5) -> Dict[str, Any]:
     """Get recent conversation context for a user"""
     try:
         from phillm.memory import ConversationMemory
@@ -503,7 +516,7 @@ async def get_conversation_context(user_id: str, limit: int = 5):
 
 
 @router.get("/users/{user_id}/info")
-async def get_user_info(user_id: str):
+async def get_user_info(user_id: str) -> Dict[str, Any]:
     """Get user information including display name"""
     try:
         from phillm.user import UserManager
@@ -524,7 +537,7 @@ async def get_user_info(user_id: str):
 
 
 @router.get("/users/cache/stats")
-async def get_user_cache_stats():
+async def get_user_cache_stats() -> Dict[str, Any]:
     """Get user cache statistics"""
     try:
         from phillm.user import UserManager
@@ -541,7 +554,7 @@ async def get_user_cache_stats():
 
 
 @router.post("/users/{user_id}/cache/invalidate")
-async def invalidate_user_cache(user_id: str):
+async def invalidate_user_cache(user_id: str) -> Dict[str, Any]:
     """Invalidate cached user information"""
     try:
         from phillm.user import UserManager

@@ -99,7 +99,7 @@ async def test_generate_ai_response(slack_bot):
         # Test business logic: response generation and embedding creation
         assert response == "I'm doing well!"
         assert embedding == [0.1, 0.2, 0.3]
-        
+
         # Verify that the services were called as expected
         mock_embedding_service.create_embedding.assert_called_once_with(query)
         slack_bot.vector_store.find_similar_messages.assert_called()
@@ -316,12 +316,52 @@ async def test_handle_message_skip_bot_messages(slack_bot):
 
 
 @pytest.mark.asyncio
+async def test_handle_mention_success(slack_bot):
+    """Test successful @ mention handling"""
+    body = {
+        "event": {
+            "user": "U456",
+            "channel": "C123",
+            "text": "<@UBOT> hello",
+            "ts": "1234567890.123",
+        }
+    }
+    say = AsyncMock()
+
+    # Mock dependencies
+    slack_bot.memory.get_conversation_context.return_value = "Previous context"
+    slack_bot.user_manager.get_user_display_name.return_value = "Test User"
+    slack_bot._generate_ai_response = AsyncMock(return_value=("Hi there!", [0.1, 0.2]))
+
+    with patch("phillm.slack.bot.update_stats"), patch("phillm.slack.bot.get_tracer"):
+        await slack_bot._handle_mention(body, say)
+
+    # Verify reactions and response
+    slack_bot.app.client.reactions_add.assert_called_with(
+        channel="C123", timestamp="1234567890.123", name="thinking_face"
+    )
+    say.assert_called_with("Hi there!")
+    slack_bot.app.client.reactions_remove.assert_called_with(
+        channel="C123", timestamp="1234567890.123", name="thinking_face"
+    )
+
+    # Verify AI response was generated with correct parameters
+    slack_bot._generate_ai_response.assert_called_once_with(
+        "<@UBOT> hello",
+        is_dm=False,  # Key difference from DMs
+        conversation_context="Previous context",
+        requester_display_name="Test User",
+    )
+
+
+@pytest.mark.asyncio
 async def test_handle_mention_with_error(slack_bot):
     body = {
         "event": {
             "user": "U456",
             "channel": "C123",
             "text": "<@UBOT> hello",
+            "ts": "1234567890.123",
         }
     }
     say = AsyncMock()
@@ -329,7 +369,28 @@ async def test_handle_mention_with_error(slack_bot):
     # Mock error in response generation
     slack_bot._generate_ai_response = AsyncMock(side_effect=Exception("Test error"))
 
-    await slack_bot._handle_mention(body, say)
+    with patch("phillm.slack.bot.get_tracer"):
+        await slack_bot._handle_mention(body, say)
 
     # Should send error message
     say.assert_called_with("Sorry, I'm having trouble generating a response right now.")
+
+
+@pytest.mark.asyncio
+async def test_handle_mention_empty_message(slack_bot):
+    """Test @ mention with empty message is skipped"""
+    body = {
+        "event": {
+            "user": "U456",
+            "channel": "C123",
+            "text": "",
+            "ts": "1234567890.123",
+        }
+    }
+    say = AsyncMock()
+
+    await slack_bot._handle_mention(body, say)
+
+    # Should not process empty messages
+    slack_bot.app.client.reactions_add.assert_not_called()
+    say.assert_not_called()

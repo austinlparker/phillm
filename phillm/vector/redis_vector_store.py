@@ -290,7 +290,9 @@ class RedisVectorStore:
         # First element is the count
         return int(result[0]) if result else 0
 
-    async def get_recent_messages(self, user_id: str, limit: int = 20) -> List[Dict[str, Any]]:
+    async def get_recent_messages(
+        self, user_id: str, limit: int = 20
+    ) -> List[Dict[str, Any]]:
         """Get recent messages for a user using vector index"""
         try:
             # Use FT.SEARCH to get user messages sorted by timestamp (newest first)

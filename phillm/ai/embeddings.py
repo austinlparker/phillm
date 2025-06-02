@@ -11,7 +11,6 @@ class EmbeddingService:
         self.client = openai.AsyncOpenAI(api_key=os.getenv("OPENAI_API_KEY"))
         self.model = "text-embedding-3-large"
 
-
     async def create_embedding(self, text: str) -> List[float]:
         tracer = get_tracer()
         start_time = time.time()
@@ -45,7 +44,6 @@ class EmbeddingService:
                 span.set_attribute("duration_seconds", duration)
             logger.error(f"Error creating embedding: {e}")
             raise
-
 
     async def create_embeddings_batch(self, texts: List[str]) -> List[List[float]]:
         try:

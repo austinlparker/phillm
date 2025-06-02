@@ -133,50 +133,114 @@ class SlackBot:
             add_error(error_msg)
 
     async def _handle_mention(self, body, say):
+        """Handle @ mentions in public channels"""
+        tracer = get_tracer()
         event = body.get("event", {})
         message_text = event.get("text", "")
         user_id = event.get("user")
         channel_id = event.get("channel")
 
+        logger.debug(
+            f"🎯 Mention Event - user_id: '{user_id}', channel_id: '{channel_id}', text: '{message_text[:50]}...'"
+        )
+
+        # Skip empty messages
+        if not message_text or message_text.strip() == "":
+            return
+
         try:
-            # Get conversation context from memory for mentions
-            conversation_context = None
-            user_display_name = None
-            if user_id:
-                conversation_context = await self.memory.get_conversation_context(
-                    user_id, limit=2
+            with tracer.start_as_current_span("handle_mention") as span:
+                span.set_attribute("user_id", user_id)
+                span.set_attribute("channel_id", channel_id)
+                span.set_attribute("message.length", len(message_text))
+                span.set_attribute("message.preview", message_text[:100])
+
+                logger.info(
+                    f"Received @ mention from user {user_id} in channel {channel_id}: {message_text[:50]}..."
                 )
-                user_display_name = await self.user_manager.get_user_display_name(
-                    user_id
+
+                # Update stats
+                update_stats(
+                    mention_conversations=1,
+                    last_mention_received=datetime.now().isoformat(),
                 )
 
-            # Generate AI response with streaming for mentions
-            response = await self._generate_ai_response(
-                message_text,
-                conversation_context=conversation_context,
-                requester_display_name=user_display_name,
-            )
+                # Get conversation context from memory for mentions
+                conversation_context = None
+                user_display_name = None
+                if user_id:
+                    conversation_context = await self.memory.get_conversation_context(
+                        user_id, limit=2
+                    )
+                    user_display_name = await self.user_manager.get_user_display_name(
+                        user_id
+                    )
 
-            # Response was already sent via streaming, no need to use say()
+                # Add thinking reaction to show we're processing
+                await self.app.client.reactions_add(
+                    channel=channel_id, timestamp=event.get("ts"), name="thinking_face"
+                )
 
-            # Store the mention interaction in memory
-            if user_id:
-                await self.memory.store_memory(
-                    user_id=user_id,
-                    memory_type=MemoryType.CHANNEL_INTERACTION,
-                    content=f"User mentioned bot: {message_text}\nBot responded: {response}",
-                    context={
-                        "channel_id": channel_id,
-                        "interaction_type": "mention",
-                        "user_message": message_text,
-                        "bot_response": response,
-                    },
-                    importance=MemoryImportance.HIGH,  # Mentions are important
+                # Generate AI response (not a DM, but in channel)
+                response, query_embedding = await self._generate_ai_response(
+                    message_text,
+                    is_dm=False,  # This is a channel mention, not a DM
+                    conversation_context=conversation_context,
+                    requester_display_name=user_display_name,
+                )
+
+                span.set_attribute("response.length", len(response))
+                span.set_attribute("response.preview", response[:100])
+
+                # Send the response using say() for channel mentions
+                await say(response)
+
+                # Remove thinking reaction
+                await self.app.client.reactions_remove(
+                    channel=channel_id, timestamp=event.get("ts"), name="thinking_face"
+                )
+
+                # Store the mention interaction in memory asynchronously (don't await)
+                if user_id:
+                    asyncio.create_task(
+                        self.memory.store_memory(
+                            user_id=user_id,
+                            memory_type=MemoryType.CHANNEL_INTERACTION,
+                            content=f"User mentioned bot: {message_text}\nBot responded: {response}",
+                            context={
+                                "channel_id": channel_id,
+                                "interaction_type": "mention",
+                                "user_message": message_text,
+                                "bot_response": response,
+                                "query_embedding": query_embedding,
+                            },
+                            importance=MemoryImportance.HIGH,  # Mentions are important
+                        )
+                    )
+
+                # Record metrics
+                telemetry.record_mention_processed(user_id, channel_id, len(response))
+
+                logger.info(
+                    f"Sent mention response to user {user_id} in channel {channel_id}"
                 )
 
         except Exception as e:
-            logger.error(f"Error generating AI response: {e}")
-            await say("Sorry, I'm having trouble generating a response right now.")
+            error_msg = f"Error handling mention: {e}"
+            logger.error(error_msg)
+            add_error(error_msg)
+
+            with tracer.start_as_current_span("handle_mention_error") as span:
+                span.set_attribute("error", str(e))
+                span.set_attribute("user_id", user_id)
+                span.set_attribute("channel_id", channel_id)
+
+                try:
+                    await say(
+                        "Sorry, I'm having trouble generating a response right now."
+                    )
+                except Exception:
+                    pass  # Don't let error responses fail
 
     async def _handle_direct_message_event(self, event):
         """Handle direct messages to the bot (from message event)"""
@@ -303,7 +367,7 @@ class SlackBot:
         if not self.target_user_id:
             logger.error("Target user ID not configured")
             return "", []
-            
+
         similar_messages = await self.vector_store.find_similar_messages(
             query, user_id=self.target_user_id, limit=8, threshold=0.35
         )
@@ -414,12 +478,18 @@ class SlackBot:
         except Exception as e:
             logger.error(f"Error storing channel interaction memory: {e}")
 
-    async def check_scraping_completeness_simple(self, channel_id: str) -> Dict[str, Any]:
+    async def check_scraping_completeness_simple(
+        self, channel_id: str
+    ) -> Dict[str, Any]:
         """Simple completeness check - see if there are older messages than what we have stored"""
         try:
             if not self.target_user_id:
-                return {"complete": False, "reason": "Target user ID not configured", "needs_scraping": True}
-            
+                return {
+                    "complete": False,
+                    "reason": "Target user ID not configured",
+                    "needs_scraping": True,
+                }
+
             # Get the oldest message we have stored for this user in this channel
             oldest_stored = await self.vector_store.get_oldest_stored_message(
                 self.target_user_id, channel_id
@@ -508,8 +578,12 @@ class SlackBot:
         """Check if we have scraped all available message history for the target user in a channel"""
         try:
             if not self.target_user_id:
-                return {"complete": False, "reason": "Target user ID not configured", "needs_scraping": True}
-            
+                return {
+                    "complete": False,
+                    "reason": "Target user ID not configured",
+                    "needs_scraping": True,
+                }
+
             # Get the oldest message we have stored for this user in this channel
             oldest_stored = await self.vector_store.get_oldest_stored_message(
                 self.target_user_id, channel_id
@@ -708,7 +782,7 @@ class SlackBot:
         if not self.target_user_id:
             logger.error("Target user ID not configured")
             return
-            
+
         try:
             # Check if it's already a channel ID (starts with C)
             if channel_identifier.startswith("C"):
@@ -932,7 +1006,9 @@ class SlackBot:
                         continue
 
                 # Check if we have complete history for this channel using simple check
-                assert channel_id is not None  # Help mypy understand the None check above
+                assert (
+                    channel_id is not None
+                )  # Help mypy understand the None check above
                 logger.info(
                     f"🔍 Checking completeness for channel {channel_name} ({channel_id})"
                 )

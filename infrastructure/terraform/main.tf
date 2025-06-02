@@ -3,12 +3,11 @@ terraform {
   required_providers {
     aws = {
       source  = "hashicorp/aws"
-      version = "~> 5.99" # Latest stable version as of Dec 2024
+      version = "~> 5.99"
     }
   }
 
   backend "s3" {
-    # Configure this with your own S3 bucket for Terraform state
     bucket = "your-phillm-terraform-state-bucket"
     key    = "phillm/terraform.tfstate"
     region = "us-east-1"
@@ -26,7 +25,7 @@ data "aws_availability_zones" "available" {
 
 data "aws_caller_identity" "current" {}
 
-# VPC and Networking
+# VPC and Networking - SIMPLIFIED: Single AZ, public subnets only
 resource "aws_vpc" "main" {
   cidr_block           = var.vpc_cidr
   enable_dns_hostnames = true
@@ -47,6 +46,7 @@ resource "aws_internet_gateway" "main" {
   }
 }
 
+# Public subnets - ALB requires at least 2 AZs
 resource "aws_subnet" "public" {
   count = 2
 
@@ -57,19 +57,6 @@ resource "aws_subnet" "public" {
 
   tags = {
     Name        = "${var.project_name}-public-subnet-${count.index + 1}"
-    Environment = var.environment
-  }
-}
-
-resource "aws_subnet" "private" {
-  count = 2
-
-  vpc_id            = aws_vpc.main.id
-  cidr_block        = cidrsubnet(var.vpc_cidr, 8, count.index + 10)
-  availability_zone = data.aws_availability_zones.available.names[count.index]
-
-  tags = {
-    Name        = "${var.project_name}-private-subnet-${count.index + 1}"
     Environment = var.environment
   }
 }
@@ -95,100 +82,7 @@ resource "aws_route_table_association" "public" {
   route_table_id = aws_route_table.public.id
 }
 
-# NAT Gateway for private subnets
-resource "aws_eip" "nat" {
-  domain = "vpc"
-
-  tags = {
-    Name        = "${var.project_name}-nat-eip"
-    Environment = var.environment
-  }
-}
-
-resource "aws_nat_gateway" "main" {
-  allocation_id = aws_eip.nat.id
-  subnet_id     = aws_subnet.public[0].id
-
-  tags = {
-    Name        = "${var.project_name}-nat"
-    Environment = var.environment
-  }
-
-  depends_on = [aws_internet_gateway.main]
-}
-
-resource "aws_route_table" "private" {
-  vpc_id = aws_vpc.main.id
-
-  route {
-    cidr_block     = "0.0.0.0/0"
-    nat_gateway_id = aws_nat_gateway.main.id
-  }
-
-  tags = {
-    Name        = "${var.project_name}-private-rt"
-    Environment = var.environment
-  }
-}
-
-resource "aws_route_table_association" "private" {
-  count = length(aws_subnet.private)
-
-  subnet_id      = aws_subnet.private[count.index].id
-  route_table_id = aws_route_table.private.id
-}
-
 # Security Groups
-resource "aws_security_group" "ecs_tasks" {
-  name        = "${var.project_name}-ecs-tasks"
-  description = "Security group for ECS tasks"
-  vpc_id      = aws_vpc.main.id
-
-  ingress {
-    from_port   = 3000
-    to_port     = 3000
-    protocol    = "tcp"
-    cidr_blocks = [var.vpc_cidr]
-  }
-
-  egress {
-    from_port   = 0
-    to_port     = 0
-    protocol    = "-1"
-    cidr_blocks = ["0.0.0.0/0"]
-  }
-
-  tags = {
-    Name        = "${var.project_name}-ecs-tasks"
-    Environment = var.environment
-  }
-}
-
-resource "aws_security_group" "redis" {
-  name        = "${var.project_name}-redis"
-  description = "Security group for Redis ECS tasks"
-  vpc_id      = aws_vpc.main.id
-
-  ingress {
-    from_port       = 6379
-    to_port         = 6379
-    protocol        = "tcp"
-    security_groups = [aws_security_group.ecs_tasks.id]
-  }
-
-  egress {
-    from_port   = 0
-    to_port     = 0
-    protocol    = "-1"
-    cidr_blocks = ["0.0.0.0/0"]
-  }
-
-  tags = {
-    Name        = "${var.project_name}-redis"
-    Environment = var.environment
-  }
-}
-
 resource "aws_security_group" "alb" {
   name        = "${var.project_name}-alb"
   description = "Security group for Application Load Balancer"
@@ -221,10 +115,61 @@ resource "aws_security_group" "alb" {
   }
 }
 
+resource "aws_security_group" "ecs_tasks" {
+  name        = "${var.project_name}-ecs-tasks"
+  description = "Security group for ECS tasks"
+  vpc_id      = aws_vpc.main.id
+
+  ingress {
+    from_port       = 3000
+    to_port         = 3000
+    protocol        = "tcp"
+    security_groups = [aws_security_group.alb.id]  # Only ALB can reach app
+  }
+
+  egress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]  # App needs internet for APIs, image pulls
+  }
+
+  tags = {
+    Name        = "${var.project_name}-ecs-tasks"
+    Environment = var.environment
+  }
+}
+
+resource "aws_security_group" "redis" {
+  name        = "${var.project_name}-redis"
+  description = "Security group for Redis ECS tasks"
+  vpc_id      = aws_vpc.main.id
+
+  ingress {
+    from_port       = 6379
+    to_port         = 6379
+    protocol        = "tcp"
+    security_groups = [aws_security_group.ecs_tasks.id]
+  }
+
+  egress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]  # Redis needs egress for pulling images
+  }
+
+  tags = {
+    Name        = "${var.project_name}-redis"
+    Environment = var.environment
+  }
+}
+
 # ECR Repository
 resource "aws_ecr_repository" "phillm" {
   name                 = var.project_name
   image_tag_mutability = "MUTABLE"
+  force_delete         = true  # Allow deletion even with images present
 
   image_scanning_configuration {
     scan_on_push = true
@@ -235,14 +180,13 @@ resource "aws_ecr_repository" "phillm" {
   }
 }
 
-# EFS for Redis persistence
+# EFS for Redis persistence - COST OPTIMIZED: Burst mode instead of provisioned
 resource "aws_efs_file_system" "redis" {
   creation_token = "${var.project_name}-redis-data"
   encrypted      = true
 
   performance_mode = "generalPurpose"
-  throughput_mode  = "provisioned"
-  provisioned_throughput_in_mibps = 10
+  throughput_mode  = "bursting"  # Changed from provisioned to save ~$15/month
 
   tags = {
     Name        = "${var.project_name}-redis-efs"
@@ -251,10 +195,8 @@ resource "aws_efs_file_system" "redis" {
 }
 
 resource "aws_efs_mount_target" "redis" {
-  count = length(aws_subnet.private)
-
   file_system_id  = aws_efs_file_system.redis.id
-  subnet_id       = aws_subnet.private[count.index].id
+  subnet_id       = aws_subnet.public[0].id  # Use first public subnet
   security_groups = [aws_security_group.efs.id]
 }
 
@@ -276,7 +218,7 @@ resource "aws_security_group" "efs" {
   }
 }
 
-# Redis ECS Task Definition
+# Redis ECS Task Definition - runs in public subnet
 resource "aws_ecs_task_definition" "redis" {
   family                   = "${var.project_name}-redis"
   network_mode             = "awsvpc"
@@ -356,7 +298,7 @@ resource "aws_ecs_task_definition" "redis" {
   }
 }
 
-# Redis ECS Service
+# Redis ECS Service - runs in public subnet with direct internet access
 resource "aws_ecs_service" "redis" {
   name            = "${var.project_name}-redis"
   cluster         = aws_ecs_cluster.main.id
@@ -366,8 +308,8 @@ resource "aws_ecs_service" "redis" {
 
   network_configuration {
     security_groups  = [aws_security_group.redis.id]
-    subnets          = aws_subnet.private[*].id
-    assign_public_ip = false
+    subnets          = [aws_subnet.public[0].id]  # Use first public subnet
+    assign_public_ip = true  # Direct internet access, no NAT Gateway needed
   }
 
   # Enable service discovery
@@ -403,20 +345,6 @@ resource "aws_service_discovery_service" "redis" {
     }
 
     routing_policy = "MULTIVALUE"
-  }
-
-  tags = {
-    Environment = var.environment
-  }
-}
-
-# ECS Cluster
-resource "aws_ecs_cluster" "main" {
-  name = "${var.project_name}-cluster"
-
-  setting {
-    name  = "containerInsights"
-    value = "enabled"
   }
 
   tags = {
@@ -468,6 +396,20 @@ resource "aws_lb_listener" "phillm" {
   default_action {
     type             = "forward"
     target_group_arn = aws_lb_target_group.phillm.arn
+  }
+}
+
+# ECS Cluster
+resource "aws_ecs_cluster" "main" {
+  name = "${var.project_name}-cluster"
+
+  setting {
+    name  = "containerInsights"
+    value = "disabled"  # Disabled to save costs - can enable if needed
+  }
+
+  tags = {
+    Environment = var.environment
   }
 }
 
@@ -568,8 +510,8 @@ resource "aws_ecs_service" "phillm" {
 
   network_configuration {
     security_groups  = [aws_security_group.ecs_tasks.id]
-    subnets          = aws_subnet.private[*].id
-    assign_public_ip = false
+    subnets          = aws_subnet.public[*].id  # Can use multiple subnets for better availability
+    assign_public_ip = true  # Still need public IP for outbound internet access
   }
 
   load_balancer {
@@ -585,10 +527,10 @@ resource "aws_ecs_service" "phillm" {
   }
 }
 
-# CloudWatch Log Groups
+# CloudWatch Log Groups - with shorter retention to save costs
 resource "aws_cloudwatch_log_group" "phillm" {
   name              = "/ecs/${var.project_name}"
-  retention_in_days = var.log_retention_days
+  retention_in_days = 7  # Reduced from 14+ days to save costs
 
   tags = {
     Environment = var.environment
@@ -597,7 +539,7 @@ resource "aws_cloudwatch_log_group" "phillm" {
 
 resource "aws_cloudwatch_log_group" "redis" {
   name              = "/ecs/${var.project_name}-redis"
-  retention_in_days = var.log_retention_days
+  retention_in_days = 7  # Reduced from 14+ days to save costs
 
   tags = {
     Environment = var.environment

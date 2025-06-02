@@ -1,10 +1,17 @@
 # PhiLLM Infrastructure Deployment Guide
 
-## 🚀 Quick Start Deployment
+## 🚀 Cost-Optimized AWS Deployment
+
+### Architecture Overview
+This deployment uses a **simplified, cost-optimized architecture** that saves ~$80/month:
+- **Single AZ with public subnets** - No NAT Gateway needed (~$45/month savings)
+- **Direct service access** - No Application Load Balancer (~$20/month savings)
+- **EFS Burst Mode** - Cost-effective storage (~$15/month savings)
+- **Containerized Redis** - Self-managed with persistent EFS storage
 
 ### Prerequisites
 - AWS CLI configured with appropriate permissions
-- Terraform >= 1.0 installed
+- OpenTofu >= 1.0 installed (or Terraform >= 1.0)
 - Docker (for building and pushing images)
 - An S3 bucket for Terraform state (optional but recommended)
 
@@ -161,15 +168,20 @@ aws ecs describe-services \
   --cluster phillm-cluster \
   --services phillm phillm-redis
 
-# Check load balancer
-LOAD_BALANCER_URL=$(terraform output -raw load_balancer_url)
-echo "Application URL: $LOAD_BALANCER_URL"
+# Get application public IP
+aws ecs describe-tasks \
+  --cluster phillm-cluster \
+  --tasks $(aws ecs list-tasks --cluster phillm-cluster --service-name phillm --query 'taskArns[0]' --output text) \
+  --query 'tasks[0].attachments[0].details[?name==`networkInterfaceId`].value' --output text | \
+  xargs -I {} aws ec2 describe-network-interfaces --network-interface-ids {} \
+  --query 'NetworkInterfaces[0].Association.PublicIp' --output text
 ```
 
 ### 6.2 Check Application Health
 ```bash
-# Test application health endpoint
-curl $LOAD_BALANCER_URL/health
+# Get the public IP from previous step and test health endpoint
+PUBLIC_IP="<ip-from-above-command>"
+curl http://$PUBLIC_IP:3000/health
 
 # Check application logs
 aws logs tail /ecs/phillm --follow
@@ -240,13 +252,16 @@ aws ec2 describe-security-groups --filters "Name=group-name,Values=phillm-*"
 nslookup redis.phillm.local
 ```
 
-#### 3. Load Balancer Not Accessible
+#### 3. Application Not Accessible
 ```bash
-# Check target group health
-aws elbv2 describe-target-health --target-group-arn $(terraform output -raw target_group_arn)
+# Check if tasks have public IPs
+aws ecs describe-tasks \
+  --cluster phillm-cluster \
+  --tasks $(aws ecs list-tasks --cluster phillm-cluster --service-name phillm --query 'taskArns[0]' --output text) \
+  --query 'tasks[0].attachments[0].details'
 
-# Check security group rules
-aws ec2 describe-security-groups --group-ids $(terraform output -raw alb_security_group_id)
+# Check security group rules (should allow port 3000 from 0.0.0.0/0)
+aws ec2 describe-security-groups --filters "Name=group-name,Values=phillm-ecs-tasks"
 ```
 
 #### 4. SSM Parameter Issues
@@ -308,8 +323,9 @@ docker rmi $ECR_REPO:latest
 ### Key Metrics to Monitor
 - **ECS Service Health**: Task count, CPU/memory utilization
 - **Redis Performance**: Connection count, memory usage, command stats
-- **Load Balancer**: Request count, response times, error rates
+- **Network Performance**: Direct public IP access, security group rules
 - **EFS Performance**: IOPS, throughput, storage utilization
+- **Cost Optimization**: No NAT Gateway, ALB, or provisioned EFS throughput charges
 
 ### Useful CloudWatch Dashboards
 ```bash
@@ -318,11 +334,19 @@ aws cloudwatch put-dashboard --dashboard-name "PhiLLM-Overview" --dashboard-body
 ```
 
 ### Honeycomb Integration
-With the OpenTelemetry AWS resource detectors now in place, you should see:
+With OpenTelemetry AWS resource detectors, you should see:
 - ECS cluster and service information
-- Task and container metadata
+- Task and container metadata  
 - AWS region and availability zone data
 - Redis instrumentation traces
+- Cost-optimized architecture telemetry
+
+### Cost Monitoring
+This simplified architecture saves approximately $80/month:
+- NAT Gateway: ~$45/month saved
+- Application Load Balancer: ~$20/month saved  
+- EFS Provisioned Throughput: ~$15/month saved
+- Single AZ deployment: Reduced data transfer costs
 
 ## 🎯 Next Steps
 

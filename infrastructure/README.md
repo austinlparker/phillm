@@ -6,13 +6,22 @@ This guide explains how to deploy PhiLLM to AWS using Terraform and GitHub Actio
 
 The deployment uses the following AWS services:
 
-- **ECS Fargate**: Container orchestration for the application
+- **ECS Fargate**: Container orchestration for the application and Redis
 - **ECR**: Container registry for Docker images
-- **Application Load Balancer**: HTTP load balancing and health checks
-- **VPC**: Isolated network with public/private subnets
+- **VPC**: Simplified single-AZ network with public subnets
+- **EFS**: Persistent storage for Redis data
+- **Service Discovery**: Internal DNS for service communication
 - **SSM Parameter Store**: Secure storage for secrets
 - **CloudWatch**: Logging and monitoring
 - **IAM**: Roles and policies for secure access
+
+### Cost-Optimized Design
+
+This infrastructure is designed for cost efficiency (~$80/month savings):
+- **No NAT Gateway**: Services run in public subnets with direct internet access
+- **No Application Load Balancer**: Direct service access via public IPs
+- **EFS Burst Mode**: Cost-effective file storage for Redis persistence
+- **Single AZ**: Simplified deployment for development/staging environments
 
 ## Prerequisites
 
@@ -102,10 +111,17 @@ aws ssm put-parameter \
   --type "SecureString" \
   --overwrite
 
-# Redis URL (if using external Redis)
+# Redis URL (uses internal service discovery)
 aws ssm put-parameter \
   --name "/phillm/redis_url" \
-  --value "redis://your-redis-host:6379" \
+  --value "redis://:your-password@redis.phillm.local:6379" \
+  --type "SecureString" \
+  --overwrite
+
+# Redis Password (for the containerized Redis)
+aws ssm put-parameter \
+  --name "/phillm/redis_password" \
+  --value "your-secure-redis-password" \
   --type "SecureString" \
   --overwrite
 ```
@@ -165,42 +181,38 @@ git push origin main
 
 ## Redis Setup
 
-The application requires Redis for vector storage. You have several options:
+The application includes a **containerized Redis instance** running on ECS Fargate with persistent EFS storage.
 
-### Option 1: AWS ElastiCache (Recommended for Production)
+### Included Redis Configuration
 
-Add to your Terraform configuration:
+- **Redis 8.0.2 Alpine**: Lightweight, official Redis image
+- **EFS Persistence**: Data persists across container restarts
+- **Service Discovery**: Accessible at `redis.phillm.local:6379`
+- **Security**: Password-protected with configurable authentication
+- **Backup Strategy**: Automatic saves (900s/1change, 300s/10changes, 60s/10000changes)
 
-```terraform
-resource "aws_elasticache_subnet_group" "phillm" {
-  name       = "${var.project_name}-cache-subnet"
-  subnet_ids = aws_subnet.private[*].id
-}
+### Redis Connection
 
-resource "aws_elasticache_cluster" "phillm" {
-  cluster_id           = var.project_name
-  engine               = "redis"
-  node_type            = "cache.t3.micro"
-  num_cache_nodes      = 1
-  parameter_group_name = "default.redis7"
-  port                 = 6379
-  subnet_group_name    = aws_elasticache_subnet_group.phillm.name
-  security_group_ids   = [aws_security_group.redis.id]
-}
+The Redis URL is automatically configured as: `redis://:password@redis.phillm.local:6379`
+
+Update the password in SSM Parameter Store:
+
+```bash
+aws ssm put-parameter \
+  --name "/phillm/redis_password" \
+  --value "your-secure-redis-password" \
+  --type "SecureString" \
+  --overwrite
 ```
 
-### Option 2: External Redis Provider
+### Alternative: External Redis
 
-Use a managed Redis service like:
-- **Redis Cloud**
-- **Upstash**
-- **Digital Ocean Managed Redis**
+For production, consider managed Redis services:
+- **AWS ElastiCache**: Fully managed, high availability
+- **Redis Cloud**: Global, multi-cloud Redis service
+- **Upstash**: Serverless Redis with pay-per-request pricing
 
-Update the Redis URL in SSM Parameter Store accordingly.
-
-### Option 3: Self-hosted Redis Container
-
-Add a Redis container to your ECS task definition (not recommended for production).
+Update the Redis URL in SSM Parameter Store to use external services.
 
 ## Monitoring and Troubleshooting
 
@@ -222,12 +234,21 @@ aws ecs describe-services \
   --services phillm
 ```
 
-### Load Balancer Health Checks
+### Service Health Checks
 
-Verify the health endpoint is responding:
+Get the public IP and verify the health endpoint:
 
 ```bash
-curl http://<load-balancer-dns>/health
+# Get service public IP
+aws ecs describe-tasks \
+  --cluster phillm-cluster \
+  --tasks $(aws ecs list-tasks --cluster phillm-cluster --service-name phillm --query 'taskArns[0]' --output text) \
+  --query 'tasks[0].attachments[0].details[?name==`networkInterfaceId`].value' --output text | \
+  xargs -I {} aws ec2 describe-network-interfaces --network-interface-ids {} \
+  --query 'NetworkInterfaces[0].Association.PublicIp' --output text
+
+# Test health endpoint
+curl http://<public-ip>:3000/health
 ```
 
 ### Common Issues
@@ -268,11 +289,21 @@ Then run `terraform apply`.
 
 ## Cost Optimization
 
-1. **Use appropriate instance sizes** - Start with small and scale up
-2. **Enable container insights selectively** - Can increase costs
-3. **Set CloudWatch log retention** - Default is 7 days
-4. **Consider spot instances** for non-critical environments
-5. **Use Reserved Instances** for predictable workloads
+This infrastructure is already optimized for cost (~$80/month savings):
+
+### Built-in Optimizations
+1. **No NAT Gateway** (~$45/month savings) - Direct internet access via public subnets
+2. **No Application Load Balancer** (~$20/month savings) - Direct service access
+3. **EFS Burst Mode** (~$15/month savings) - Pay only for storage used
+4. **Container Insights Disabled** - Can be enabled if monitoring needed
+5. **Short Log Retention** - 7 days to minimize CloudWatch costs
+6. **Single AZ** - Reduced complexity and data transfer costs
+
+### Additional Optimizations
+1. **Right-size containers** - Start with small CPU/memory and scale up
+2. **Monitor usage** - Use CloudWatch metrics to optimize resource allocation
+3. **Reserved Capacity** - Consider Savings Plans for predictable workloads
+4. **Spot Instances** - For development environments (requires Terraform changes)
 
 ## Security Best Practices
 

@@ -44,7 +44,11 @@ async def health_check() -> Dict[str, Any]:
         else:
             raise HTTPException(
                 status_code=503,
-                detail={"status": "unhealthy", "service": "PhiLLM", "redis": "disconnected"}
+                detail={
+                    "status": "unhealthy",
+                    "service": "PhiLLM",
+                    "redis": "disconnected",
+                },
             )
     except HTTPException:
         raise  # Re-raise HTTPException to preserve status code
@@ -52,7 +56,7 @@ async def health_check() -> Dict[str, Any]:
         logger.error(f"Health check failed: {e}")
         raise HTTPException(
             status_code=503,
-            detail={"status": "unhealthy", "service": "PhiLLM", "error": str(e)}
+            detail={"status": "unhealthy", "service": "PhiLLM", "error": str(e)},
         )
 
 
@@ -172,7 +176,9 @@ async def reset_scraping_state(channel_id: str) -> Dict[str, Any]:
 
 
 @router.get("/scraping/completeness/{channel_id}")
-async def check_scraping_completeness(channel_id: str, detailed: bool = False) -> Dict[str, Any]:
+async def check_scraping_completeness(
+    channel_id: str, detailed: bool = False
+) -> Dict[str, Any]:
     """Check if we have scraped all available message history for the target user in a channel"""
     try:
         from phillm.slack.bot import SlackBot
@@ -245,7 +251,9 @@ async def debug_vector_search() -> Dict[str, Any]:
         target_user_id = os.getenv("TARGET_USER_ID")
 
         # Get total message count
-        total_messages = await bot.vector_store.get_user_message_count(target_user_id or "")
+        total_messages = await bot.vector_store.get_user_message_count(
+            target_user_id or ""
+        )
 
         # Test search with different thresholds
         test_query = "mcdonalds"
@@ -269,7 +277,9 @@ async def debug_vector_search() -> Dict[str, Any]:
             }
 
         # Get a few recent messages to verify storage
-        recent = await bot.vector_store.get_recent_messages(target_user_id or "", limit=5)
+        recent = await bot.vector_store.get_recent_messages(
+            target_user_id or "", limit=5
+        )
 
         return {
             "target_user_id": target_user_id,
@@ -449,7 +459,10 @@ async def get_user_memory_stats(user_id: str) -> Dict[str, Any]:
 
 @router.get("/memory/{user_id}/recall")
 async def recall_user_memories(
-    user_id: str, query: Optional[str] = None, limit: int = 10, min_relevance: float = 0.3
+    user_id: str,
+    query: Optional[str] = None,
+    limit: int = 10,
+    min_relevance: float = 0.3,
 ) -> Dict[str, Any]:
     """Recall memories for a user"""
     try:

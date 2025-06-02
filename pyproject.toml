@@ -124,3 +124,8 @@ skip_covered = false
 
 [tool.coverage.html]
 directory = "htmlcov"
+
+[dependency-groups]
+dev = [
+    "pre-commit>=4.2.0",
+]

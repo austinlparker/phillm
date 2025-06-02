@@ -75,7 +75,7 @@ async def test_cache_expiry_check(user_manager):
         "display_name": "Old User",
         "cached_at": str(current_time - 90000),  # 25 hours ago (expired, TTL is 24h)
     }
-    
+
     # Return expired cache data, the method should detect expiry and delete it
     user_manager.redis_client.hgetall.return_value = expired_cache_data
     user_manager.redis_client.delete = AsyncMock()
@@ -89,7 +89,7 @@ async def test_cache_expiry_check(user_manager):
                     "display_name": "Fresh User",
                     "real_name": "Fresh Real User",
                 }
-            }
+            },
         }
     )
 
@@ -109,13 +109,13 @@ def test_cache_key_format():
 
 
 # NOTE: Removed infrastructure tests that were testing external integrations
-# (Slack API calls, Redis operations, connection management) rather than 
-# business logic. These should be covered by integration tests or end-to-end 
+# (Slack API calls, Redis operations, connection management) rather than
+# business logic. These should be covered by integration tests or end-to-end
 # tests that can use real external services in test environments.
 #
 # Removed tests:
 # - test_get_user_display_name_api_call (Slack API integration)
-# - test_get_user_display_name_fallback_* (Slack API integration) 
+# - test_get_user_display_name_fallback_* (Slack API integration)
 # - test_get_user_info_api_call (Slack API integration)
 # - test_invalidate_user_cache (Redis operation)
 # - test_get_cache_stats (Redis scanning)

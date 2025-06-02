@@ -59,6 +59,7 @@ class TelemetryConfig:
         self.completion_counter: Optional[metrics.Counter] = None
         self.similarity_search_counter: Optional[metrics.Counter] = None
         self.dm_counter: Optional[metrics.Counter] = None
+        self.mention_counter: Optional[metrics.Counter] = None
         self.scraping_counter: Optional[metrics.Counter] = None
         self.response_time_histogram: Optional[metrics.Histogram] = None
         self.embedding_time_histogram: Optional[metrics.Histogram] = None
@@ -398,6 +399,12 @@ class TelemetryConfig:
             unit="1",
         )
 
+        self.mention_counter = self.meter.create_counter(
+            "phillm_mention_messages_total",
+            description="Total number of @ mention messages processed",
+            unit="1",
+        )
+
         self.scraping_counter = self.meter.create_counter(
             "phillm_messages_scraped_total",
             description="Total number of messages scraped from Slack",
@@ -493,6 +500,25 @@ class TelemetryConfig:
         except Exception as e:
             logger.debug(f"Failed to record DM metrics: {e}")
 
+    def record_mention_processed(
+        self, user_id: str, channel_id: str, response_length: int
+    ) -> None:
+        """Record @ mention processing metrics"""
+        try:
+            if self.mention_counter:
+                self.mention_counter.add(
+                    1,
+                    {
+                        "user_id": user_id,
+                        "channel_id": channel_id,
+                        "response_length_bucket": self._get_length_bucket(
+                            response_length
+                        ),
+                    },
+                )
+        except Exception as e:
+            logger.debug(f"Failed to record mention metrics: {e}")
+
     def record_message_scraped(self, channel_id: str, user_id: str) -> None:
         """Record message scraping metrics"""
         try:
@@ -549,5 +575,3 @@ def get_tracer() -> trace.Tracer:
         return telemetry.tracer
     # OpenTelemetry's default tracer is a noop when no provider is set
     return trace.get_tracer(__name__)
-
-

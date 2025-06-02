@@ -243,7 +243,6 @@ Respond exactly as Phillip would:"""
 
         return prompt
 
-
     async def generate_scheduled_message(
         self, context: str, user_id: str, topic: Optional[str] = None
     ) -> str:

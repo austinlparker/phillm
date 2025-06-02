@@ -14,12 +14,12 @@ def test_health_check_redis_healthy():
         mock_instance = AsyncMock()
         mock_instance.health_check.return_value = True
         mock_vector_store.return_value = mock_instance
-        
+
         response = client.get("/health")
         assert response.status_code == 200
         assert response.json() == {
             "status": "healthy",
-            "service": "PhiLLM", 
+            "service": "PhiLLM",
             "redis": "connected",
         }
 
@@ -30,7 +30,7 @@ def test_health_check_redis_unhealthy():
         mock_instance = AsyncMock()
         mock_instance.health_check.return_value = False
         mock_vector_store.return_value = mock_instance
-        
+
         response = client.get("/health")
         assert response.status_code == 503
         assert response.json() == {

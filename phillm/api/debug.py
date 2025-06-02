@@ -2,7 +2,7 @@ from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse
 import os
 from datetime import datetime
-from typing import Any, Dict, List, Union
+from typing import Any, Dict
 
 from phillm.vector.redis_vector_store import RedisVectorStore
 
@@ -20,6 +20,8 @@ debug_stats: Dict[str, Any] = {
     "channels_scraped": [],
     "dm_conversations": 0,
     "last_dm_received": None,
+    "mention_conversations": 0,
+    "last_mention_received": None,
 }
 
 
@@ -28,7 +30,12 @@ def update_stats(**kwargs: Any) -> None:
     for key, value in kwargs.items():
         if key in debug_stats:
             if (
-                key in ["total_messages_processed", "dm_conversations"]
+                key
+                in [
+                    "total_messages_processed",
+                    "dm_conversations",
+                    "mention_conversations",
+                ]
                 and isinstance(value, int)
                 and value == 1
             ):
@@ -230,6 +237,10 @@ async def debug_page(request: Request) -> str:
                         <h4>DM Conversations</h4>
                         <p>{debug_stats["dm_conversations"]:,} messages</p>
                     </div>
+                    <div class="metric">
+                        <h4>@ Mention Responses</h4>
+                        <p>{debug_stats["mention_conversations"]:,} messages</p>
+                    </div>
                 </div>
             </div>
             
@@ -263,6 +274,7 @@ async def debug_page(request: Request) -> str:
                     <div><strong>Last Scrape Completed:</strong> {debug_stats["last_scrape_completed"] or "Never"}</div>
                     <div><strong>Last API Call:</strong> {debug_stats["last_api_call"] or "Never"}</div>
                     <div><strong>Last DM Received:</strong> {debug_stats["last_dm_received"] or "Never"}</div>
+                    <div><strong>Last @ Mention Received:</strong> {debug_stats["last_mention_received"] or "Never"}</div>
                 </div>
             </div>
             

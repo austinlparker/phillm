@@ -340,7 +340,11 @@ class ConversationMemory:
         logger.debug(f"💾 Stored DM memory {memory_id} for user {user_id}")
 
     async def store_channel_interaction(
-        self, user_id: str, message: str, channel_id: str, channel_name: Optional[str] = None
+        self,
+        user_id: str,
+        message: str,
+        channel_id: str,
+        channel_name: Optional[str] = None,
     ) -> None:
         """Store a channel interaction"""
         context = {
@@ -357,7 +361,9 @@ class ConversationMemory:
             importance=MemoryImportance.MEDIUM,
         )
 
-    async def store_user_preference(self, user_id: str, preference: str, value: str) -> None:
+    async def store_user_preference(
+        self, user_id: str, preference: str, value: str
+    ) -> None:
         """Store a user preference or behavior pattern"""
         context = {"preference_type": preference, "value": value}
 

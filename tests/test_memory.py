@@ -16,9 +16,13 @@ def memory():
     with (
         patch("phillm.memory.conversation_memory.redis.from_url") as mock_redis,
         patch("phillm.memory.conversation_memory.get_tracer") as mock_tracer,
+        patch("phillm.memory.conversation_memory.SearchIndex") as mock_search_index,
+        patch("redis.Redis.from_url") as mock_sync_redis,
     ):
-        mock_client = AsyncMock()
-        mock_redis.return_value = mock_client
+        mock_async_client = AsyncMock()
+        mock_sync_client = MagicMock()
+        mock_redis.return_value = mock_async_client
+        mock_sync_redis.return_value = mock_sync_client
 
         # Mock tracer with a proper span context manager
         mock_span = MagicMock()
@@ -29,8 +33,20 @@ def memory():
         mock_tracer_instance.start_as_current_span.return_value = mock_span
         mock_tracer.return_value = mock_tracer_instance
 
+        # Mock search index
+        mock_index = MagicMock()
+        mock_search_index.return_value = mock_index
+
         memory_instance = ConversationMemory()
-        memory_instance.redis_client = mock_client
+        memory_instance.redis_client = mock_async_client
+        memory_instance.sync_redis_client = mock_sync_client
+        memory_instance.index = mock_index
+        memory_instance._redis_healthy = True
+
+        # Mock the connection methods to prevent actual Redis connections
+        memory_instance._ensure_redis_connection = AsyncMock()
+        memory_instance.initialize_index = AsyncMock()
+
         return memory_instance
 
 
@@ -52,9 +68,11 @@ async def test_store_memory_success(memory):
         importance=MemoryImportance.HIGH,
     )
 
-    assert memory_id.startswith("U123:dm_conversation:")
+    assert isinstance(memory_id, str) and len(memory_id) == 32  # MD5 hash
     memory.redis_client.hset.assert_called_once()
-    memory.redis_client.sadd.assert_called()
+    # Verify the document key uses the new format
+    call_args = memory.redis_client.hset.call_args
+    assert call_args[0][0].startswith("mem:")
 
 
 @pytest.mark.asyncio
@@ -79,39 +97,35 @@ async def test_store_dm_interaction(memory):
 
 @pytest.mark.asyncio
 async def test_recall_memories_with_query(memory):
-    # Mock existing memories
-    memory_data = {
-        "memory_id": "U123:dm_conversation:123",
+    # Mock embedding service
+    mock_embedding_service = AsyncMock()
+    mock_embedding_service.create_embedding.return_value = [0.1, 0.2, 0.3]
+    memory.set_embedding_service(mock_embedding_service)
+
+    # Mock vector search results
+    mock_search_result = {
+        "memory_id": "test_memory_123",
         "user_id": "U123",
         "memory_type": "dm_conversation",
         "content": "Test memory content",
         "context": json.dumps({"channel_id": "D123"}),
         "importance": "3",
         "timestamp": str(time.time()),
-        "embedding": json.dumps([0.1, 0.2, 0.3]),
         "decay_factor": "1.0",
         "access_count": "0",
-        "last_accessed": "",
+        "last_accessed": "0.0",
+        "vector_distance": 0.2,  # High similarity
     }
 
-    memory.redis_client.smembers.return_value = ["U123:dm_conversation:123"]
-    memory.redis_client.hgetall.return_value = memory_data
+    # Mock the vector search methods
+    memory._vector_search_memories = AsyncMock(return_value=[mock_search_result])
+    memory._update_memory_access_vector = AsyncMock()
 
-    # Mock embedding service
-    mock_embedding_service = AsyncMock()
-    mock_embedding_service.create_embedding.return_value = [0.1, 0.2, 0.3]
-    memory.set_embedding_service(mock_embedding_service)
-
-    # Mock update memory access
-    memory._update_memory_access = AsyncMock()
-
-    with patch.object(memory, "_cosine_similarity", return_value=0.8):
-        memories = await memory.recall_memories(
-            user_id="U123", query="test query", limit=5
-        )
+    memories = await memory.recall_memories(user_id="U123", query="test query", limit=5)
 
     assert len(memories) == 1
     assert memories[0].content == "Test memory content"
+    memory._vector_search_memories.assert_called_once()
 
 
 @pytest.mark.asyncio
@@ -155,38 +169,48 @@ def test_memory_calculate_relevance_score():
 
 @pytest.mark.asyncio
 async def test_get_memory_stats(memory):
-    # Mock memories
-    memory_data = [
-        {
-            "memory_id": "U123:dm_conversation:1",
-            "user_id": "U123",
-            "memory_type": "dm_conversation",
-            "content": "Test content 1",
-            "context": "{}",
-            "importance": "3",
-            "timestamp": str(time.time() - 100),
-            "embedding": "",
-            "decay_factor": "1.0",
-            "access_count": "5",
-            "last_accessed": "",
-        },
-        {
-            "memory_id": "U123:channel_interaction:2",
-            "user_id": "U123",
-            "memory_type": "channel_interaction",
-            "content": "Test content 2",
-            "context": "{}",
-            "importance": "2",
-            "timestamp": str(time.time()),
-            "embedding": "",
-            "decay_factor": "1.0",
-            "access_count": "2",
-            "last_accessed": "",
-        },
-    ]
+    # Mock the method calls to avoid connection issues
+    memory._get_user_memory_count = AsyncMock(return_value=2)
 
-    memory.redis_client.smembers.return_value = ["mem1", "mem2"]
-    memory.redis_client.hgetall.side_effect = memory_data
+    # Mock Redis search responses for stats
+    memory.redis_client.execute_command = AsyncMock()
+
+    # Mock responses for different search queries
+    async def mock_execute_command(*args):
+        if "LIMIT" in args and args[-1] == "0":
+            # Count queries return count as first element
+            if "dm_conversation" in args[2]:
+                return [1]  # 1 DM conversation
+            elif "channel_interaction" in args[2]:
+                return [1]  # 1 channel interaction
+            elif "importance:[3 3]" in args[2]:
+                return [1]  # 1 high importance
+            elif "importance:[2 2]" in args[2]:
+                return [1]  # 1 medium importance
+            else:
+                return [2]  # Total count
+        elif "SORTBY" in args:
+            if "timestamp" in args and "ASC" in args:
+                # Oldest memory
+                return [1, "mem:old", str(time.time() - 100)]
+            elif "timestamp" in args and "DESC" in args:
+                # Newest memory
+                return [1, "mem:new", str(time.time())]
+            elif "access_count" in args:
+                # Most accessed memory
+                return [
+                    1,
+                    "mem:accessed",
+                    "content",
+                    "Test content",
+                    "access_count",
+                    "5",
+                    "memory_type",
+                    "dm_conversation",
+                ]
+        return [0]
+
+    memory.redis_client.execute_command.side_effect = mock_execute_command
 
     stats = await memory.get_memory_stats("U123")
 
@@ -201,45 +225,69 @@ async def test_cleanup_old_memories(memory):
     # Create mock memories - more than max
     memory.max_memories_per_user = 2
 
-    old_memory = Memory(
-        memory_id="old_123",
-        user_id="U123",
-        memory_type=MemoryType.DM_CONVERSATION,
-        content="Old content",
-        context={},
-        importance=MemoryImportance.LOW,
-        timestamp=time.time() - 86400 * 10,  # 10 days ago
-        access_count=0,
-    )
-
-    recent_memory = Memory(
-        memory_id="recent_123",
-        user_id="U123",
-        memory_type=MemoryType.DM_CONVERSATION,
-        content="Recent content",
-        context={},
-        importance=MemoryImportance.HIGH,
-        timestamp=time.time(),
-        access_count=10,
-    )
-
-    memory._get_user_memories = AsyncMock(return_value=[old_memory, recent_memory])
-    memory._delete_memory = AsyncMock()
+    # Mock memory count and search results
+    memory._get_user_memory_count = AsyncMock(return_value=2)
+    memory._get_recent_memories = AsyncMock(return_value=[])
+    memory._delete_memory_vector = AsyncMock()
 
     await memory._cleanup_old_memories("U123")
 
     # Should not delete anything as we have exactly max_memories_per_user
-    memory._delete_memory.assert_not_called()
+    memory._delete_memory_vector.assert_not_called()
 
     # Test with too many memories
-    memory._get_user_memories.return_value = [old_memory, recent_memory, old_memory]
+    memory._get_user_memory_count.return_value = 3
+    mock_memories = [
+        {
+            "memory_id": "old_123",
+            "user_id": "U123",
+            "memory_type": "dm_conversation",
+            "content": "Old content",
+            "context": "{}",
+            "importance": "1",  # LOW
+            "timestamp": str(time.time() - 86400 * 10),  # 10 days ago
+            "decay_factor": "1.0",
+            "access_count": "0",
+            "last_accessed": "0.0",
+        },
+        {
+            "memory_id": "recent_123",
+            "user_id": "U123",
+            "memory_type": "dm_conversation",
+            "content": "Recent content",
+            "context": "{}",
+            "importance": "3",  # HIGH
+            "timestamp": str(time.time()),
+            "decay_factor": "1.0",
+            "access_count": "10",
+            "last_accessed": str(time.time()),
+        },
+        {
+            "memory_id": "old2_123",
+            "user_id": "U123",
+            "memory_type": "dm_conversation",
+            "content": "Old content 2",
+            "context": "{}",
+            "importance": "1",  # LOW
+            "timestamp": str(time.time() - 86400 * 5),  # 5 days ago
+            "decay_factor": "1.0",
+            "access_count": "1",
+            "last_accessed": "0.0",
+        },
+    ]
+    memory._get_recent_memories.return_value = mock_memories
+
     await memory._cleanup_old_memories("U123")
 
     # Should delete the least relevant memory
-    memory._delete_memory.assert_called()
+    memory._delete_memory_vector.assert_called()
 
 
 @pytest.mark.asyncio
 async def test_close(memory):
+    # Ensure sync_redis_client has a close method for the test
+    memory.sync_redis_client.close = MagicMock()
+
     await memory.close()
     memory.redis_client.close.assert_called_once()
+    memory.sync_redis_client.close.assert_called_once()

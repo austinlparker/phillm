@@ -1,12 +1,18 @@
 import os
 import json
 import time
+import hashlib
 from typing import List, Dict, Optional, Any
 from datetime import datetime
 from dataclasses import dataclass, asdict
 from enum import Enum
 import redis.asyncio as redis
+import numpy as np
 from loguru import logger
+from redisvl.index import SearchIndex
+from redisvl.schema import IndexSchema
+from redisvl.query import VectorQuery
+from redisvl.query.filter import Tag
 from phillm.telemetry import get_tracer
 
 
@@ -97,24 +103,149 @@ class Memory:
 
 
 class ConversationMemory:
-    """Manages conversation memory for users"""
+    """Manages conversation memory for users using Redis vector search"""
 
     def __init__(self) -> None:
         self.redis_url = os.getenv("REDIS_URL", "redis://localhost:6379")
         self.redis_password = os.getenv("REDIS_PASSWORD")
 
-        self.redis_client = redis.from_url(
-            self.redis_url, password=self.redis_password, decode_responses=True
-        )
+        # Connection configuration
+        self.connection_timeout = 10  # seconds
+
+        # Initialize clients as None, will be created on demand
+        self.redis_client = None
+        self.sync_redis_client = None
+        self._redis_healthy = False
+
+        # Vector dimensions for text-embedding-3-large
+        self.vector_dim = 3072
 
         # Memory configuration
         self.max_memories_per_user = int(os.getenv("MAX_MEMORIES_PER_USER", "1000"))
         self.memory_retention_days = int(os.getenv("MEMORY_RETENTION_DAYS", "30"))
         self.embedding_service = None  # Will be injected
 
+        # Index configuration for memories
+        self.index_name = "phillm_memories"
+        self.index = None
+
+        # Schema for memory vector search
+        self.schema = IndexSchema.from_dict(
+            {
+                "index": {
+                    "name": self.index_name,
+                    "prefix": "mem:",
+                    "storage_type": "hash",
+                },
+                "fields": [
+                    {"name": "user_id", "type": "tag"},
+                    {"name": "memory_type", "type": "tag"},
+                    {"name": "importance", "type": "numeric"},
+                    {"name": "timestamp", "type": "numeric"},
+                    {"name": "access_count", "type": "numeric"},
+                    {"name": "last_accessed", "type": "numeric"},
+                    {"name": "decay_factor", "type": "numeric"},
+                    {"name": "content", "type": "text"},
+                    {"name": "context", "type": "text"},
+                    {"name": "memory_id", "type": "tag"},
+                    {
+                        "name": "embedding",
+                        "type": "vector",
+                        "attrs": {
+                            "dims": self.vector_dim,
+                            "distance_metric": "cosine",
+                            "algorithm": "hnsw",
+                            "datatype": "float32",
+                        },
+                    },
+                ],
+            }
+        )
+
+    async def _ensure_redis_connection(self) -> None:
+        """Ensure Redis connection is established and healthy"""
+        if self._redis_healthy and self.redis_client and self.sync_redis_client:
+            try:
+                # Quick health check
+                await self.redis_client.ping()
+                return
+            except Exception:
+                # Connection lost, need to reconnect
+                self._redis_healthy = False
+
+        logger.info("Connecting to Redis for memory management...")
+
+        # Initialize async Redis client for regular operations
+        self.redis_client = redis.from_url(
+            self.redis_url,
+            password=self.redis_password,
+            decode_responses=True,
+            socket_connect_timeout=self.connection_timeout,
+            socket_timeout=self.connection_timeout,
+        )
+
+        # Initialize sync Redis client for RedisVL operations
+        import redis as sync_redis
+
+        self.sync_redis_client = sync_redis.Redis.from_url(
+            self.redis_url,
+            password=self.redis_password,
+            decode_responses=True,
+            socket_connect_timeout=self.connection_timeout,
+            socket_timeout=self.connection_timeout,
+        )
+
+        # Test the connections
+        await self.redis_client.ping()  # type: ignore[attr-defined]
+        self.sync_redis_client.ping()  # type: ignore[attr-defined]
+
+        self._redis_healthy = True
+        logger.info("✅ Redis connection established for memory management")
+
+    async def initialize_index(self) -> None:
+        """Initialize the memory vector search index"""
+        # Ensure Redis connection first
+        await self._ensure_redis_connection()
+
+        # Create SearchIndex instance using the sync redis client
+        self.index = SearchIndex(
+            schema=self.schema, redis_client=self.sync_redis_client
+        )
+
+        # Check if index exists, create if not
+        if not self._index_exists_sync():
+            logger.info(f"Creating memory vector index: {self.index_name}")
+            self.index.create(overwrite=False)  # type: ignore[attr-defined]
+            logger.info("✅ Memory vector index created successfully")
+        else:
+            logger.info(f"Memory vector index {self.index_name} already exists")
+            # Connect to existing index
+            self.index.connect()  # type: ignore[attr-defined]
+
+    def _index_exists_sync(self) -> bool:
+        """Check if the vector index exists (sync version for initialization)"""
+        try:
+            # Check if index exists by looking for it in the index list
+            indices = self.sync_redis_client.execute_command("FT._LIST")  # type: ignore[attr-defined]
+            # indices is a list of byte strings, so check for both string and bytes
+            return (
+                (self.index_name in indices) or (self.index_name.encode() in indices)
+                if indices
+                else False
+            )
+        except Exception:
+            return False
+
     def set_embedding_service(self, embedding_service: Any) -> None:
         """Inject embedding service for memory vectorization"""
         self.embedding_service = embedding_service
+
+    def _generate_memory_id(
+        self, user_id: str, memory_type: MemoryType, timestamp: float
+    ) -> str:
+        """Generate a unique memory ID"""
+        content = f"{user_id}:{memory_type.value}:{timestamp}"
+        return hashlib.md5(content.encode()).hexdigest()
 
     async def store_memory(
         self,
@@ -125,12 +256,17 @@ class ConversationMemory:
         importance: MemoryImportance = MemoryImportance.MEDIUM,
         pre_computed_embedding: Optional[List[float]] = None,
     ) -> str:
-        """Store a new memory"""
+        """Store a new memory using vector search index"""
         tracer = get_tracer()
+        await self._ensure_redis_connection()
 
         try:
-            # Generate memory ID
-            memory_id = f"{user_id}:{memory_type.value}:{int(time.time() * 1000)}"
+            current_timestamp = time.time()
+
+            # Generate memory ID using consistent format
+            memory_id = self._generate_memory_id(
+                user_id, memory_type, current_timestamp
+            )
 
             # Use pre-computed embedding or create new one for semantic search
             embedding = pre_computed_embedding
@@ -139,58 +275,53 @@ class ConversationMemory:
                     embedding = await self.embedding_service.create_embedding(content)
                 except Exception as e:
                     logger.warning(f"Failed to create embedding for memory: {e}")
-
-            # Create memory object
-            memory = Memory(
-                memory_id=memory_id,
-                user_id=user_id,
-                memory_type=memory_type,
-                content=content,
-                context=context,
-                importance=importance,
-                timestamp=time.time(),
-                embedding=embedding,
-            )
+                    # Continue without embedding - we can still store the memory
+                    embedding = None
 
             with tracer.start_as_current_span("store_memory") as span:
                 span.set_attribute("user_id", user_id)
                 span.set_attribute("memory_type", memory_type.value)
                 span.set_attribute("content_length", len(content))
                 span.set_attribute("importance", importance.value)
+                span.set_attribute("has_embedding", embedding is not None)
 
-                # Store memory data
-                memory_data = memory.to_dict()
-                # Convert complex objects to JSON strings for Redis storage
+                # Ensure index is initialized
+                if not self.index:
+                    await self.initialize_index()
+
+                # Prepare data for vector storage
+                doc_key = f"mem:{memory_id}"
+                memory_data = {
+                    "user_id": user_id,
+                    "memory_type": memory_type.value,
+                    "content": content,
+                    "context": json.dumps(context),
+                    "importance": importance.value,
+                    "timestamp": current_timestamp,
+                    "memory_id": memory_id,
+                    "decay_factor": 1.0,
+                    "access_count": 0,
+                    "last_accessed": 0.0,  # Use 0.0 instead of None for numeric field
+                }
+
+                # Add embedding if available
                 if embedding:
-                    memory_data["embedding"] = json.dumps(embedding)
+                    memory_data["embedding"] = np.array(
+                        embedding, dtype=np.float32
+                    ).tobytes()
                 else:
-                    memory_data["embedding"] = ""
+                    # Create zero vector for memories without embeddings
+                    memory_data["embedding"] = np.zeros(
+                        self.vector_dim, dtype=np.float32
+                    ).tobytes()
 
-                # Serialize context dict to JSON string
-                memory_data["context"] = json.dumps(memory_data["context"])
-
-                # Filter out None values and convert all values to strings for Redis
-                redis_data = {}
-                for key, value in memory_data.items():
-                    if value is not None:
-                        redis_data[key] = str(value)
-                    else:
-                        redis_data[key] = ""
-
-                await self.redis_client.hset(f"memory:{memory_id}", mapping=redis_data)
-
-                # Add to user's memory index
-                await self.redis_client.sadd(f"user_memories:{user_id}", memory_id)
-
-                # Add to type-specific index
-                await self.redis_client.sadd(
-                    f"memories_by_type:{memory_type.value}", memory_id
-                )
+                # Store in Redis with vector index prefix
+                await self.redis_client.hset(doc_key, mapping=memory_data)  # type: ignore[attr-defined]
 
                 # Clean up old memories if needed
                 await self._cleanup_old_memories(user_id)
 
-                logger.debug(f"Stored memory {memory_id} for user {user_id}")
+                logger.debug(f"Stored vector memory {memory_id} for user {user_id}")
                 return memory_id
 
         except Exception as e:
@@ -205,54 +336,80 @@ class ConversationMemory:
         limit: int = 10,
         min_relevance: float = 0.3,
     ) -> List[Memory]:
-        """Recall relevant memories for a user"""
+        """Recall relevant memories using Redis vector search"""
         tracer = get_tracer()
         current_time = time.time()
+        await self._ensure_redis_connection()
 
         try:
             with tracer.start_as_current_span("recall_memories") as span:
                 span.set_attribute("user_id", user_id)
                 span.set_attribute("query_length", len(query) if query else 0)
                 span.set_attribute("limit", limit)
+                span.set_attribute("has_memory_types_filter", memory_types is not None)
 
-                memories = await self._get_user_memories(user_id, memory_types)
+                # Ensure index is initialized
+                if not self.index:
+                    await self.initialize_index()
 
-                if not memories:
-                    return []
-
-                # If we have a query, compute semantic similarity
-                query_embedding = None
                 if query and self.embedding_service:
+                    # Use vector similarity search for semantic matching
                     try:
                         query_embedding = await self.embedding_service.create_embedding(
                             query
                         )
-                    except Exception as e:
-                        logger.warning(f"Failed to create query embedding: {e}")
-
-                # Score and filter memories
-                relevant_memories = []
-                for memory in memories:
-                    # Calculate base similarity
-                    base_similarity = 0.0
-                    if query_embedding and memory.embedding:
-                        base_similarity = self._cosine_similarity(
-                            query_embedding, memory.embedding
+                        memories = await self._vector_search_memories(
+                            user_id,
+                            query_embedding,
+                            memory_types,
+                            limit * 2,  # Get more for filtering
                         )
-                    elif query and query.lower() in memory.content.lower():
-                        base_similarity = 0.7  # Text match fallback
+                    except Exception as e:
+                        logger.warning(
+                            f"Failed to create query embedding, falling back to text search: {e}"
+                        )
+                        memories = await self._text_search_memories(
+                            user_id, query, memory_types, limit * 2
+                        )
+                else:
+                    # Use text search or get recent memories
+                    if query:
+                        memories = await self._text_search_memories(
+                            user_id, query, memory_types, limit * 2
+                        )
+                    else:
+                        memories = await self._get_recent_memories(
+                            user_id, memory_types, limit * 2
+                        )
 
-                    # Calculate overall relevance
-                    relevance = memory.calculate_relevance_score(
-                        current_time, base_similarity
-                    )
+                if not memories:
+                    return []
 
-                    if relevance >= min_relevance:
-                        relevant_memories.append((memory, relevance))
-                        # Update access count
-                        memory.access_count += 1
-                        memory.last_accessed = current_time
-                        await self._update_memory_access(memory)
+                # Score memories with time decay and access frequency
+                relevant_memories = []
+                for memory_data in memories:
+                    try:
+                        memory = self._memory_from_search_result(memory_data)
+
+                        # Calculate base similarity from search result
+                        base_similarity = memory_data.get("similarity", 0.0)
+
+                        # Calculate overall relevance with time decay
+                        relevance = memory.calculate_relevance_score(
+                            current_time, base_similarity
+                        )
+
+                        if relevance >= min_relevance:
+                            relevant_memories.append((memory, relevance))
+
+                            # Update access count asynchronously
+                            memory.access_count += 1
+                            memory.last_accessed = current_time
+                            await self._update_memory_access_vector(memory)
+
+                    except Exception as e:
+                        logger.warning(f"Failed to process memory result: {e}")
+                        continue
 
                 # Sort by relevance and return top results
                 relevant_memories.sort(key=lambda x: x[1], reverse=True)
@@ -377,107 +534,297 @@ class ConversationMemory:
             importance=MemoryImportance.HIGH,
         )
 
-    async def _get_user_memories(
-        self, user_id: str, memory_types: Optional[List[MemoryType]] = None
-    ) -> List[Memory]:
-        """Get all memories for a user, optionally filtered by type"""
+    async def _vector_search_memories(
+        self,
+        user_id: str,
+        query_embedding: List[float],
+        memory_types: Optional[List[MemoryType]] = None,
+        limit: int = 20,
+    ) -> List[Dict[str, Any]]:
+        """Search memories using vector similarity"""
         try:
-            memory_ids = await self.redis_client.smembers(f"user_memories:{user_id}")
+            # Ensure consistent float32 format
+            query_vector = np.array(query_embedding, dtype=np.float32)
 
-            memories = []
-            for memory_id in memory_ids:
-                memory_data = await self.redis_client.hgetall(f"memory:{memory_id}")
-                if memory_data:
-                    # Convert embedding back from JSON
-                    if memory_data.get("embedding"):
-                        try:
-                            memory_data["embedding"] = json.loads(
-                                memory_data["embedding"]
-                            )
-                        except (json.JSONDecodeError, TypeError):
-                            memory_data["embedding"] = None
-                    else:
-                        memory_data["embedding"] = None
+            # Build filter expression for user
+            filter_expression = Tag("user_id") == user_id
 
-                    # Convert context back from JSON
-                    if memory_data.get("context"):
-                        try:
-                            memory_data["context"] = json.loads(memory_data["context"])
-                        except (json.JSONDecodeError, TypeError):
-                            memory_data["context"] = {}
-                    else:
-                        memory_data["context"] = {}
-
-                    # Convert numeric fields back from strings
-                    memory_data["timestamp"] = (
-                        float(memory_data.get("timestamp", 0))
-                        if memory_data.get("timestamp")
-                        else 0.0
+            # Add memory type filter if specified
+            if memory_types:
+                type_values = [mt.value for mt in memory_types]
+                if len(type_values) == 1:
+                    filter_expression = filter_expression & (
+                        Tag("memory_type") == type_values[0]
                     )
-                    memory_data["decay_factor"] = (
-                        float(memory_data.get("decay_factor", 1.0))
-                        if memory_data.get("decay_factor")
-                        else 1.0
-                    )
-                    memory_data["access_count"] = (
-                        int(memory_data.get("access_count", 0))
-                        if memory_data.get("access_count")
-                        else 0
-                    )
+                else:
+                    # For multiple types, use OR logic within the memory_type filter
+                    type_filter = Tag("memory_type").in_set(type_values)
+                    filter_expression = filter_expression & type_filter
 
-                    # Handle last_accessed which might be empty string for None
-                    last_accessed_str = memory_data.get("last_accessed", "")
-                    if last_accessed_str and last_accessed_str != "":
-                        memory_data["last_accessed"] = float(last_accessed_str)
-                    else:
-                        memory_data["last_accessed"] = None
+            # Create vector query
+            vector_query = VectorQuery(
+                vector=query_vector,
+                vector_field_name="embedding",
+                return_fields=[
+                    "user_id",
+                    "memory_type",
+                    "content",
+                    "context",
+                    "importance",
+                    "timestamp",
+                    "memory_id",
+                    "decay_factor",
+                    "access_count",
+                    "last_accessed",
+                ],
+                num_results=limit,
+                filter_expression=filter_expression,
+            )
 
-                    # Convert enum values back to proper types
-                    # MemoryImportance is stored as integer but retrieved as string
-                    if memory_data.get("importance"):
-                        memory_data["importance"] = int(memory_data["importance"])
+            # Execute search
+            results = self.index.query(vector_query)  # type: ignore[attr-defined]
 
-                    # MemoryType should remain as string (enum value)
+            # Process results and convert distance to similarity
+            processed_results = []
+            for result in results:
+                # Redis vector search returns distance, convert to similarity
+                distance = float(result.get("vector_distance", 1.0))
+                similarity = 1.0 - distance  # Cosine distance to similarity
 
-                    memory = Memory.from_dict(memory_data)
+                result_data = dict(result)
+                result_data["similarity"] = similarity
+                processed_results.append(result_data)
 
-                    # Filter by type if specified
-                    if memory_types is None or memory.memory_type in memory_types:
-                        memories.append(memory)
-
-            return memories
+            return processed_results
 
         except Exception as e:
-            logger.error(f"Error getting user memories: {e}")
+            logger.error(f"Error in vector search: {e}")
             return []
 
-    async def _update_memory_access(self, memory: Memory) -> None:
-        """Update memory access statistics"""
+    async def _text_search_memories(
+        self,
+        user_id: str,
+        query: str,
+        memory_types: Optional[List[MemoryType]] = None,
+        limit: int = 20,
+    ) -> List[Dict[str, Any]]:
+        """Search memories using text search"""
         try:
-            await self.redis_client.hset(
-                f"memory:{memory.memory_id}",
+            # Build search query
+            search_query = f"@user_id:{{{user_id}}} @content:{query}"
+
+            # Add memory type filter if specified
+            if memory_types:
+                type_values = [mt.value for mt in memory_types]
+                if len(type_values) == 1:
+                    search_query += f" @memory_type:{{{type_values[0]}}}"
+                else:
+                    type_query = "|".join([f"{{{t}}}" for t in type_values])
+                    search_query += f" @memory_type:({type_query})"
+
+            # Execute text search
+            result = await self.redis_client.execute_command(  # type: ignore[attr-defined]
+                "FT.SEARCH",
+                self.index_name,
+                search_query,
+                "LIMIT",
+                "0",
+                str(limit),
+                "RETURN",
+                "10",
+                "user_id",
+                "memory_type",
+                "content",
+                "context",
+                "importance",
+                "timestamp",
+                "memory_id",
+                "decay_factor",
+                "access_count",
+                "last_accessed",
+            )
+
+            return self._parse_search_results(
+                result, similarity=0.7
+            )  # Default text match similarity
+
+        except Exception as e:
+            logger.error(f"Error in text search: {e}")
+            return []
+
+    async def _get_recent_memories(
+        self,
+        user_id: str,
+        memory_types: Optional[List[MemoryType]] = None,
+        limit: int = 20,
+    ) -> List[Dict[str, Any]]:
+        """Get recent memories for a user, sorted by timestamp"""
+        try:
+            # Build search query for user
+            search_query = f"@user_id:{{{user_id}}}"
+
+            # Add memory type filter if specified
+            if memory_types:
+                type_values = [mt.value for mt in memory_types]
+                if len(type_values) == 1:
+                    search_query += f" @memory_type:{{{type_values[0]}}}"
+                else:
+                    type_query = "|".join([f"{{{t}}}" for t in type_values])
+                    search_query += f" @memory_type:({type_query})"
+
+            # Execute search sorted by timestamp (newest first)
+            result = await self.redis_client.execute_command(  # type: ignore[attr-defined]
+                "FT.SEARCH",
+                self.index_name,
+                search_query,
+                "SORTBY",
+                "timestamp",
+                "DESC",
+                "LIMIT",
+                "0",
+                str(limit),
+                "RETURN",
+                "10",
+                "user_id",
+                "memory_type",
+                "content",
+                "context",
+                "importance",
+                "timestamp",
+                "memory_id",
+                "decay_factor",
+                "access_count",
+                "last_accessed",
+            )
+
+            return self._parse_search_results(
+                result, similarity=0.0
+            )  # No similarity for recent memories
+
+        except Exception as e:
+            logger.error(f"Error getting recent memories: {e}")
+            return []
+
+    def _parse_search_results(
+        self, result: List[Any], similarity: float = 0.0
+    ) -> List[Dict[str, Any]]:
+        """Parse Redis search results into memory data"""
+        memories = []
+        if len(result) > 1:
+            # Skip count (first element) and process results in pairs
+            for i in range(1, len(result), 2):
+                doc_id = result[i]
+                fields = result[i + 1] if i + 1 < len(result) else []
+
+                # Extract memory ID from document key (mem:id)
+                memory_id = (
+                    doc_id.replace("mem:", "") if doc_id.startswith("mem:") else doc_id
+                )
+
+                # Parse field-value pairs
+                field_data = {"similarity": similarity}
+                for j in range(0, len(fields), 2):
+                    if j + 1 < len(fields):
+                        field_data[fields[j]] = fields[j + 1]
+
+                # Ensure memory_id is set
+                if "memory_id" not in field_data:
+                    field_data["memory_id"] = memory_id
+
+                memories.append(field_data)
+
+        return memories
+
+    def _memory_from_search_result(self, result_data: Dict[str, Any]) -> Memory:
+        """Convert search result to Memory object"""
+        # Parse context JSON
+        context = {}
+        if result_data.get("context"):
+            try:
+                context = json.loads(result_data["context"])
+            except (json.JSONDecodeError, TypeError):
+                context = {}
+
+        # Convert numeric fields
+        timestamp = float(result_data.get("timestamp", 0))
+        importance = int(result_data.get("importance", MemoryImportance.MEDIUM.value))
+        decay_factor = float(result_data.get("decay_factor", 1.0))
+        access_count = int(result_data.get("access_count", 0))
+
+        # Handle last_accessed
+        last_accessed = None
+        if result_data.get("last_accessed"):
+            try:
+                last_accessed_val = float(result_data["last_accessed"])
+                if last_accessed_val > 0:
+                    last_accessed = last_accessed_val
+            except (ValueError, TypeError):
+                pass
+
+        return Memory(
+            memory_id=result_data.get("memory_id", ""),
+            user_id=result_data.get("user_id", ""),
+            memory_type=MemoryType(
+                result_data.get("memory_type", MemoryType.DM_CONVERSATION.value)
+            ),
+            content=result_data.get("content", ""),
+            context=context,
+            importance=MemoryImportance(importance),
+            timestamp=timestamp,
+            embedding=None,  # Don't load embeddings for recall (performance)
+            decay_factor=decay_factor,
+            access_count=access_count,
+            last_accessed=last_accessed,
+        )
+
+    async def _update_memory_access_vector(self, memory: Memory) -> None:
+        """Update memory access statistics in vector store"""
+        try:
+            doc_key = f"mem:{memory.memory_id}"
+            await self.redis_client.hset(  # type: ignore[attr-defined]
+                doc_key,
                 mapping={
                     "access_count": memory.access_count,
-                    "last_accessed": memory.last_accessed or "",
+                    "last_accessed": memory.last_accessed or 0.0,
                 },
             )
         except Exception as e:
             logger.error(f"Error updating memory access: {e}")
 
-    async def _cleanup_old_memories(self, user_id: str) -> None:
-        """Clean up old, low-importance memories"""
-        try:
-            memories = await self._get_user_memories(user_id)
+    # Legacy method for backwards compatibility
+    async def _update_memory_access(self, memory: Memory) -> None:
+        """Legacy update method - redirects to vector version"""
+        await self._update_memory_access_vector(memory)
 
-            if len(memories) <= self.max_memories_per_user:
+    async def _cleanup_old_memories(self, user_id: str) -> None:
+        """Clean up old, low-importance memories using vector index"""
+        try:
+            # Get total count of user memories
+            memory_count = await self._get_user_memory_count(user_id)
+
+            if memory_count <= self.max_memories_per_user:
                 return
 
-            # Sort by relevance (considering decay)
+            # Get all user memories sorted by timestamp (oldest first)
+            memories_to_score = await self._get_recent_memories(
+                user_id, None, memory_count  # Get all memories
+            )
+
+            if len(memories_to_score) <= self.max_memories_per_user:
+                return
+
+            # Convert to Memory objects and score them
             current_time = time.time()
             scored_memories = []
-            for memory in memories:
-                score = memory.calculate_relevance_score(current_time, 0.0)
-                scored_memories.append((memory, score))
+
+            for memory_data in memories_to_score:
+                try:
+                    memory = self._memory_from_search_result(memory_data)
+                    score = memory.calculate_relevance_score(current_time, 0.0)
+                    scored_memories.append((memory, score))
+                except Exception as e:
+                    logger.warning(f"Failed to score memory for cleanup: {e}")
+                    continue
 
             # Keep the most relevant memories
             scored_memories.sort(key=lambda x: x[1], reverse=True)
@@ -487,7 +834,7 @@ class ConversationMemory:
 
             # Delete old memories
             for memory in to_delete:
-                await self._delete_memory(memory.memory_id, user_id)
+                await self._delete_memory_vector(memory.memory_id)
 
             if to_delete:
                 logger.info(
@@ -497,19 +844,38 @@ class ConversationMemory:
         except Exception as e:
             logger.error(f"Error cleaning up memories: {e}")
 
-    async def _delete_memory(self, memory_id: str, user_id: str) -> None:
-        """Delete a specific memory"""
+    async def _get_user_memory_count(self, user_id: str) -> int:
+        """Get total memory count for a user using vector index"""
         try:
-            await self.redis_client.delete(f"memory:{memory_id}")
-            await self.redis_client.srem(f"user_memories:{user_id}", memory_id)
-            # Note: Not removing from type index for performance, it will be cleaned up eventually
+            result = await self.redis_client.execute_command(  # type: ignore[attr-defined]
+                "FT.SEARCH",
+                self.index_name,
+                f"@user_id:{{{user_id}}}",
+                "LIMIT",
+                "0",
+                "0",
+            )
+            # First element is the count
+            return int(result[0]) if result else 0
+        except Exception as e:
+            logger.error(f"Error getting user memory count: {e}")
+            return 0
+
+    async def _delete_memory_vector(self, memory_id: str) -> None:
+        """Delete a specific memory from vector store"""
+        try:
+            doc_key = f"mem:{memory_id}"
+            await self.redis_client.delete(doc_key)  # type: ignore[attr-defined]
         except Exception as e:
             logger.error(f"Error deleting memory {memory_id}: {e}")
 
-    def _cosine_similarity(self, vec1: List[float], vec2: List[float]) -> float:
-        """Calculate cosine similarity between two vectors"""
-        import numpy as np
+    # Legacy method for backwards compatibility
+    async def _delete_memory(self, memory_id: str, user_id: str) -> None:
+        """Legacy delete method - redirects to vector version"""
+        await self._delete_memory_vector(memory_id)
 
+    def _cosine_similarity(self, vec1: List[float], vec2: List[float]) -> float:
+        """Calculate cosine similarity between two vectors (legacy method)"""
         vec1_np = np.array(vec1)
         vec2_np = np.array(vec2)
 
@@ -523,12 +889,15 @@ class ConversationMemory:
         return float(dot_product / (norm1 * norm2))
 
     async def get_memory_stats(self, user_id: str) -> Dict[str, Any]:
-        """Get memory statistics for a user"""
+        """Get memory statistics for a user using vector index queries"""
         try:
-            memories = await self._get_user_memories(user_id)
+            await self._ensure_redis_connection()
+
+            # Get total count
+            total_memories = await self._get_user_memory_count(user_id)
 
             stats: Dict[str, Any] = {
-                "total_memories": len(memories),
+                "total_memories": total_memories,
                 "by_type": {},
                 "by_importance": {},
                 "oldest_memory": None,
@@ -536,37 +905,117 @@ class ConversationMemory:
                 "most_accessed": None,
             }
 
-            if not memories:
+            if total_memories == 0:
                 return stats
 
-            # Count by type and importance
-            for memory in memories:
-                memory_type = memory.memory_type.value
-                importance = memory.importance.value
+            # Get aggregated stats using Redis search
+            try:
+                # Get count by type
+                for memory_type in MemoryType:
+                    type_result = await self.redis_client.execute_command(  # type: ignore[attr-defined]
+                        "FT.SEARCH",
+                        self.index_name,
+                        f"@user_id:{{{user_id}}} @memory_type:{{{memory_type.value}}}",
+                        "LIMIT",
+                        "0",
+                        "0",
+                    )
+                    count = int(type_result[0]) if type_result else 0
+                    if count > 0:
+                        stats["by_type"][memory_type.value] = count
 
-                stats["by_type"][memory_type] = stats["by_type"].get(memory_type, 0) + 1
-                stats["by_importance"][importance] = (
-                    stats["by_importance"].get(importance, 0) + 1
+                # Get count by importance
+                for importance in MemoryImportance:
+                    importance_result = await self.redis_client.execute_command(  # type: ignore[attr-defined]
+                        "FT.SEARCH",
+                        self.index_name,
+                        f"@user_id:{{{user_id}}} @importance:[{importance.value} {importance.value}]",
+                        "LIMIT",
+                        "0",
+                        "0",
+                    )
+                    count = int(importance_result[0]) if importance_result else 0
+                    if count > 0:
+                        stats["by_importance"][importance.value] = count
+
+                # Get oldest memory
+                oldest_result = await self.redis_client.execute_command(  # type: ignore[attr-defined]
+                    "FT.SEARCH",
+                    self.index_name,
+                    f"@user_id:{{{user_id}}}",
+                    "SORTBY",
+                    "timestamp",
+                    "ASC",
+                    "LIMIT",
+                    "0",
+                    "1",
+                    "RETURN",
+                    "1",
+                    "timestamp",
                 )
+                if len(oldest_result) > 2:
+                    oldest_timestamp = float(oldest_result[2])
+                    stats["oldest_memory"] = datetime.fromtimestamp(
+                        oldest_timestamp
+                    ).isoformat()
 
-            # Find oldest and newest
-            memories.sort(key=lambda m: m.timestamp)
-            stats["oldest_memory"] = datetime.fromtimestamp(
-                memories[0].timestamp
-            ).isoformat()
-            stats["newest_memory"] = datetime.fromtimestamp(
-                memories[-1].timestamp
-            ).isoformat()
+                # Get newest memory
+                newest_result = await self.redis_client.execute_command(  # type: ignore[attr-defined]
+                    "FT.SEARCH",
+                    self.index_name,
+                    f"@user_id:{{{user_id}}}",
+                    "SORTBY",
+                    "timestamp",
+                    "DESC",
+                    "LIMIT",
+                    "0",
+                    "1",
+                    "RETURN",
+                    "1",
+                    "timestamp",
+                )
+                if len(newest_result) > 2:
+                    newest_timestamp = float(newest_result[2])
+                    stats["newest_memory"] = datetime.fromtimestamp(
+                        newest_timestamp
+                    ).isoformat()
 
-            # Find most accessed
-            most_accessed = max(memories, key=lambda m: m.access_count)
-            stats["most_accessed"] = {
-                "content": most_accessed.content[:100] + "..."
-                if len(most_accessed.content) > 100
-                else most_accessed.content,
-                "access_count": most_accessed.access_count,
-                "type": most_accessed.memory_type.value,
-            }
+                # Get most accessed memory
+                most_accessed_result = await self.redis_client.execute_command(  # type: ignore[attr-defined]
+                    "FT.SEARCH",
+                    self.index_name,
+                    f"@user_id:{{{user_id}}}",
+                    "SORTBY",
+                    "access_count",
+                    "DESC",
+                    "LIMIT",
+                    "0",
+                    "1",
+                    "RETURN",
+                    "4",
+                    "content",
+                    "access_count",
+                    "memory_type",
+                )
+                if len(most_accessed_result) > 2:
+                    # Parse the result fields
+                    fields = most_accessed_result[2:]
+                    field_data = {}
+                    for j in range(0, len(fields), 2):
+                        if j + 1 < len(fields):
+                            field_data[fields[j]] = fields[j + 1]
+
+                    content = field_data.get("content", "")
+                    stats["most_accessed"] = {
+                        "content": (
+                            content[:100] + "..." if len(content) > 100 else content
+                        ),
+                        "access_count": int(field_data.get("access_count", 0)),
+                        "type": field_data.get("memory_type", ""),
+                    }
+
+            except Exception as e:
+                logger.warning(f"Error getting detailed stats, using basic count: {e}")
 
             return stats
 
@@ -575,5 +1024,8 @@ class ConversationMemory:
             return {"error": str(e)}
 
     async def close(self) -> None:
-        """Close Redis connection"""
-        await self.redis_client.close()
+        """Close Redis connections"""
+        if self.redis_client:
+            await self.redis_client.close()  # type: ignore[attr-defined]
+        if self.sync_redis_client:
+            self.sync_redis_client.close()  # type: ignore[attr-defined]

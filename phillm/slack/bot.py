@@ -684,9 +684,7 @@ class SlackBot:
                     # Check if we should continue
                     if not batch_result.get("has_more") or not batch_result.get(  # type: ignore[call-overload]
                         "response_metadata", {}
-                    ).get(
-                        "next_cursor"
-                    ):
+                    ).get("next_cursor"):
                         break
 
                     cursor = batch_result["response_metadata"]["next_cursor"]

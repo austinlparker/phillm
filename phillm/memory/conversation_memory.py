@@ -807,7 +807,9 @@ class ConversationMemory:
 
             # Get all user memories sorted by timestamp (oldest first)
             memories_to_score = await self._get_recent_memories(
-                user_id, None, memory_count  # Get all memories
+                user_id,
+                None,
+                memory_count,  # Get all memories
             )
 
             if len(memories_to_score) <= self.max_memories_per_user:

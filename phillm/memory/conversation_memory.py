@@ -291,7 +291,7 @@ class ConversationMemory:
 
                 # Prepare data for vector storage
                 doc_key = f"mem:{memory_id}"
-                memory_data = {
+                memory_data: Dict[str, Any] = {
                     "user_id": user_id,
                     "memory_type": memory_type.value,
                     "content": content,

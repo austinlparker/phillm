@@ -486,12 +486,15 @@ async def clear_memory_store(user_id: str) -> Dict[str, Any]:
         memory.set_embedding_service(embedding_service)
 
         # Get current memory count before clearing
-        memories = await memory._get_user_memories(user_id)
-        initial_count = len(memories)
+        initial_count = await memory._get_user_memory_count(user_id)
 
-        # Clear memories by deleting from Redis
-        for mem in memories:
-            await memory._delete_memory(mem.memory_id, user_id)
+        # Clear all memories for the user by deleting from vector index
+        # Use a large limit to get all memories
+        memories = await memory._get_recent_memories(user_id, limit=10000)
+        for memory_data in memories:
+            memory_id = memory_data.get("memory_id")
+            if memory_id:
+                await memory._delete_memory_vector(memory_id)
 
         await memory.close()
 
@@ -603,12 +606,16 @@ async def clear_all_stores(user_id: str) -> Dict[str, Any]:
             embedding_service = EmbeddingService()
             memory.set_embedding_service(embedding_service)
 
-            memories = await memory._get_user_memories(user_id)
-            for mem in memories:
-                await memory._delete_memory(mem.memory_id, user_id)
+            initial_count = await memory._get_user_memory_count(user_id)
+            # Clear all memories for the user by deleting from vector index
+            memories = await memory._get_recent_memories(user_id, limit=10000)
+            for memory_data in memories:
+                memory_id = memory_data.get("memory_id")
+                if memory_id:
+                    await memory._delete_memory_vector(memory_id)
             await memory.close()
 
-            results["memory_store"] = {"success": True, "deleted": len(memories)}
+            results["memory_store"] = {"success": True, "deleted": initial_count}
         except Exception as e:
             results["memory_store"] = {"success": False, "error": str(e)}  # type: ignore[dict-item]
 

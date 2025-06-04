@@ -684,7 +684,9 @@ class SlackBot:
                     # Check if we should continue
                     if not batch_result.get("has_more") or not batch_result.get(  # type: ignore[call-overload]
                         "response_metadata", {}
-                    ).get("next_cursor"):
+                    ).get(
+                        "next_cursor"
+                    ):
                         break
 
                     cursor = batch_result["response_metadata"]["next_cursor"]
@@ -712,9 +714,11 @@ class SlackBot:
 
                         return {
                             "complete": is_complete,
-                            "reason": f"Partial check completed (timeout after {max_iterations} iterations)"
-                            if is_complete
-                            else "May be missing older messages (check timed out)",
+                            "reason": (
+                                f"Partial check completed (timeout after {max_iterations} iterations)"
+                                if is_complete
+                                else "May be missing older messages (check timed out)"
+                            ),
                             "oldest_stored": oldest_stored_ts,
                             "oldest_available": oldest_available_ts,
                             "oldest_stored_preview": oldest_stored["message"][:50]
@@ -749,9 +753,11 @@ class SlackBot:
 
                 return {
                     "complete": is_complete,
-                    "reason": "Comparison completed"
-                    if is_complete
-                    else "Missing older messages",
+                    "reason": (
+                        "Comparison completed"
+                        if is_complete
+                        else "Missing older messages"
+                    ),
                     "oldest_stored": oldest_stored_ts,
                     "oldest_available": oldest_available_ts,
                     "oldest_stored_preview": oldest_stored["message"][:50] + "...",

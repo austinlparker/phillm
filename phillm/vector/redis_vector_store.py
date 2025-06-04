@@ -264,9 +264,11 @@ class RedisVectorStore:
 
         # Record metrics
         telemetry.record_similarity_search(
-            len(query_embedding_or_text)
-            if isinstance(query_embedding_or_text, str)
-            else 0,
+            (
+                len(query_embedding_or_text)
+                if isinstance(query_embedding_or_text, str)
+                else 0
+            ),
             len(final_results),
             threshold,
             max_similarity,

@@ -268,9 +268,11 @@ async def debug_vector_search() -> Dict[str, Any]:
                 "messages": [
                     {
                         "similarity": msg.get("similarity", 0),
-                        "preview": msg["message"][:80] + "..."
-                        if len(msg["message"]) > 80
-                        else msg["message"],
+                        "preview": (
+                            msg["message"][:80] + "..."
+                            if len(msg["message"]) > 80
+                            else msg["message"]
+                        ),
                     }
                     for msg in similar
                 ],
@@ -288,9 +290,11 @@ async def debug_vector_search() -> Dict[str, Any]:
             "similarity_results": results,
             "recent_messages_sample": [
                 {
-                    "preview": msg["message"][:80] + "..."
-                    if len(msg["message"]) > 80
-                    else msg["message"],
+                    "preview": (
+                        msg["message"][:80] + "..."
+                        if len(msg["message"]) > 80
+                        else msg["message"]
+                    ),
                     "timestamp": msg.get("timestamp"),
                 }
                 for msg in recent

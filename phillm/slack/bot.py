@@ -76,9 +76,11 @@ class SlackBot:
             f"Received message: user={user_id}, channel_type={channel_type}, text={message_text[:50]}..."
         )
 
-        # Skip messages from bots (including ourselves)
-        if event.get("bot_id") or event.get("subtype") == "bot_message":
-            logger.debug("Skipping bot message")
+        # Skip messages from bots (including ourselves) and all system messages with subtypes
+        if event.get("bot_id") or event.get("subtype"):
+            logger.debug(
+                f"Skipping bot/system message with subtype: {event.get('subtype')}"
+            )
             return
 
         # Handle target user messages for scraping (in channels)
@@ -528,7 +530,9 @@ class SlackBot:
                 target_user_older_messages: List[Dict[str, Any]] = [
                     msg
                     for msg in messages_list
-                    if msg.get("user") == self.target_user_id and msg.get("text")
+                    if msg.get("user") == self.target_user_id
+                    and msg.get("text")
+                    and not msg.get("subtype")
                 ]
 
                 if target_user_older_messages:
@@ -668,7 +672,9 @@ class SlackBot:
                     target_messages = [
                         msg
                         for msg in messages
-                        if msg.get("user") == self.target_user_id and msg.get("text")
+                        if msg.get("user") == self.target_user_id
+                        and msg.get("text")
+                        and not msg.get("subtype")
                     ]
 
                     if target_messages:
@@ -880,10 +886,13 @@ class SlackBot:
                 )
 
                 # Process target user messages from this batch immediately
+                # Skip messages with subtypes (system messages like channel_join, channel_leave, etc.)
                 target_messages_in_batch = [
                     msg
                     for msg in messages
-                    if msg.get("user") == self.target_user_id and msg.get("text")
+                    if msg.get("user") == self.target_user_id
+                    and msg.get("text")
+                    and not msg.get("subtype")
                 ]
 
                 if target_messages_in_batch:

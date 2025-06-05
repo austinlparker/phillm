@@ -12,6 +12,75 @@ from redisvl.query.filter import Tag
 from phillm.telemetry import telemetry
 
 
+class RedisConnectionPool:
+    """Singleton Redis connection pool for reuse across instances"""
+
+    _instance = None
+    _redis_client = None
+    _sync_redis_client = None
+    _redis_healthy = False
+
+    def __new__(cls):
+        if cls._instance is None:
+            cls._instance = super().__new__(cls)
+        return cls._instance
+
+    @classmethod
+    async def get_connection(
+        cls,
+        redis_url: str,
+        redis_password: Optional[str] = None,
+        connection_timeout: int = 10,
+    ) -> tuple[Any, Any]:
+        """Get or create shared Redis connection"""
+        instance = cls()
+
+        if (
+            instance._redis_healthy
+            and instance._redis_client
+            and instance._sync_redis_client
+        ):
+            try:
+                # Quick health check on existing connection
+                await instance._redis_client.ping()
+                return instance._redis_client, instance._sync_redis_client
+            except Exception:
+                # Connection lost, need to reconnect
+                instance._redis_healthy = False
+
+        # Create new connections
+        logger.debug("Creating new Redis connection pool")
+
+        # Initialize async Redis client
+        instance._redis_client = redis.from_url(
+            redis_url,
+            password=redis_password,
+            decode_responses=True,
+            socket_connect_timeout=connection_timeout,
+            socket_timeout=connection_timeout,
+        )
+
+        # Initialize sync Redis client for RedisVL operations
+        import redis as sync_redis
+
+        instance._sync_redis_client = sync_redis.Redis.from_url(
+            redis_url,
+            password=redis_password,
+            decode_responses=True,
+            socket_connect_timeout=connection_timeout,
+            socket_timeout=connection_timeout,
+        )
+
+        # Test the connections
+        await instance._redis_client.ping()
+        instance._sync_redis_client.ping()
+
+        instance._redis_healthy = True
+        logger.info("✅ Redis connection pool established successfully")
+
+        return instance._redis_client, instance._sync_redis_client
+
+
 class RedisVectorStore:
     """Modern Redis vector store using RedisVL for semantic search"""
 
@@ -23,10 +92,9 @@ class RedisVectorStore:
         self.connection_timeout = 10  # seconds
         self.retry_delay = 5  # seconds between health check attempts
 
-        # Initialize clients as None, will be created on demand
+        # Initialize clients as None, will be created on demand via pool
         self.redis_client = None
         self.sync_redis_client = None
-        self._redis_healthy = False
 
         # Vector dimensions for text-embedding-3-large
         self.vector_dim = 3072
@@ -64,44 +132,14 @@ class RedisVectorStore:
         )
 
     async def _ensure_redis_connection(self) -> None:
-        """Ensure Redis connection is established and healthy"""
-        if self._redis_healthy and self.redis_client and self.sync_redis_client:
-            try:
-                # Quick health check
-                await self.redis_client.ping()
-                return
-            except Exception:
-                # Connection lost, need to reconnect
-                self._redis_healthy = False
-
-        logger.info("Connecting to Redis...")
-
-        # Initialize async Redis client for regular operations
-        self.redis_client = redis.from_url(
-            self.redis_url,
-            password=self.redis_password,
-            decode_responses=True,
-            socket_connect_timeout=self.connection_timeout,
-            socket_timeout=self.connection_timeout,
+        """Ensure Redis connection is established and healthy using connection pool"""
+        # Get shared connections from pool (this handles reconnection logic internally)
+        (
+            self.redis_client,
+            self.sync_redis_client,
+        ) = await RedisConnectionPool.get_connection(
+            self.redis_url, self.redis_password, self.connection_timeout
         )
-
-        # Initialize sync Redis client for RedisVL operations
-        import redis as sync_redis
-
-        self.sync_redis_client = sync_redis.Redis.from_url(
-            self.redis_url,
-            password=self.redis_password,
-            decode_responses=True,
-            socket_connect_timeout=self.connection_timeout,
-            socket_timeout=self.connection_timeout,
-        )
-
-        # Test the connections
-        await self.redis_client.ping()  # type: ignore[attr-defined]
-        self.sync_redis_client.ping()  # type: ignore[attr-defined]
-
-        self._redis_healthy = True
-        logger.info("✅ Redis connection established successfully")
 
     async def health_check(self) -> bool:
         """Check if Redis is healthy and available"""

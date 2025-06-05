@@ -1,0 +1,304 @@
+import os
+import time
+from typing import List, Dict, Any, Optional
+from datetime import datetime
+from loguru import logger
+from redisvl.extensions.session_manager import SemanticSessionManager
+import redis.asyncio as redis
+from phillm.ai.embeddings import EmbeddingService
+from phillm.telemetry import get_tracer
+
+
+class ConversationSessionManager:
+    """Manages user conversation sessions using RedisVL SemanticSessionManager"""
+
+    def __init__(self):
+        self.redis_url = os.getenv("REDIS_URL", "redis://localhost:6379")
+        self.redis_password = os.getenv("REDIS_PASSWORD")
+        self.connection_timeout = 10
+
+        # Initialize Redis connections
+        self.redis_client = None
+        self.sync_redis_client = None
+
+        # Cache of user sessions
+        self.user_sessions: Dict[str, SemanticSessionManager] = {}
+
+        # Session configuration
+        self.distance_threshold = float(
+            os.getenv("CONVERSATION_DISTANCE_THRESHOLD", "0.35")
+        )
+        self.max_context_messages = int(os.getenv("MAX_CONTEXT_MESSAGES", "10"))
+
+        # Initialize embedding service for session management
+        self.embedding_service = EmbeddingService()
+
+    async def _ensure_redis_connection(self) -> None:
+        """Ensure Redis connection is established"""
+        if self.redis_client and self.sync_redis_client:
+            try:
+                await self.redis_client.ping()
+                return
+            except Exception:
+                pass
+
+        logger.info("Establishing Redis connection for conversation sessions...")
+
+        # Async client
+        self.redis_client = redis.from_url(
+            self.redis_url,
+            password=self.redis_password,
+            decode_responses=True,
+            socket_connect_timeout=self.connection_timeout,
+            socket_timeout=self.connection_timeout,
+        )
+
+        # Sync client for RedisVL
+        import redis as sync_redis
+
+        self.sync_redis_client = sync_redis.Redis.from_url(
+            self.redis_url,
+            password=self.redis_password,
+            decode_responses=True,
+            socket_connect_timeout=self.connection_timeout,
+            socket_timeout=self.connection_timeout,
+        )
+
+        # Test connections
+        await self.redis_client.ping()
+        self.sync_redis_client.ping()
+
+        logger.info("✅ Redis connection established for conversation sessions")
+
+    def _get_user_session(self, user_id: str) -> SemanticSessionManager:
+        """Get or create a semantic session for a user"""
+        if user_id not in self.user_sessions:
+            session_name = f"user_session_{user_id}"
+
+            # Use custom vectorizer to integrate with our existing embedding service
+            from redisvl.utils.vectorize.text.openai import OpenAITextVectorizer
+
+            # Create session with OpenAI vectorizer to match our embedding service
+            session = SemanticSessionManager(
+                name=session_name,
+                redis_client=self.sync_redis_client,
+                distance_threshold=self.distance_threshold,
+                vectorizer=OpenAITextVectorizer(
+                    model="text-embedding-3-large",  # Match our embedding service
+                    api_config={"api_key": os.getenv("OPENAI_API_KEY")},
+                ),
+            )
+
+            self.user_sessions[user_id] = session
+            logger.debug(f"Created new conversation session for user {user_id}")
+
+        return self.user_sessions[user_id]
+
+    async def add_conversation_turn(
+        self,
+        user_id: str,
+        user_message: str,
+        bot_response: str,
+        venue_info: Dict[str, Any],
+    ) -> None:
+        """Add a complete conversation turn (user message + bot response)"""
+        tracer = get_tracer()
+
+        try:
+            with tracer.start_as_current_span("add_conversation_turn") as span:
+                span.set_attribute("user_id", user_id)
+                span.set_attribute("user_message.length", len(user_message))
+                span.set_attribute("bot_response.length", len(bot_response))
+                span.set_attribute("venue_type", venue_info.get("type", "unknown"))
+
+                await self._ensure_redis_connection()
+                session = self._get_user_session(user_id)
+
+                # Create metadata for both messages
+                timestamp = time.time()
+                base_metadata = {
+                    "timestamp": timestamp,
+                    "venue_type": venue_info.get("type", "unknown"),
+                    "channel_id": venue_info.get("channel_id"),
+                    "user_id": user_id,
+                }
+
+                # Use the store method to add the conversation turn
+                session.store(
+                    prompt=user_message, response=bot_response, metadata=base_metadata
+                )
+
+                logger.debug(
+                    f"Stored conversation turn for user {user_id} in {venue_info.get('type', 'unknown')} venue"
+                )
+
+        except Exception as e:
+            logger.error(f"Error adding conversation turn for user {user_id}: {e}")
+            raise
+
+    async def get_relevant_conversation_context(
+        self,
+        user_id: str,
+        current_query: str,
+        venue_info: Dict[str, Any],
+        max_messages: Optional[int] = None,
+    ) -> List[Dict[str, Any]]:
+        """Get semantically relevant conversation context for current query"""
+        tracer = get_tracer()
+
+        try:
+            with tracer.start_as_current_span(
+                "get_relevant_conversation_context"
+            ) as span:
+                span.set_attribute("user_id", user_id)
+                span.set_attribute("current_query.length", len(current_query))
+                span.set_attribute("venue_type", venue_info.get("type", "unknown"))
+
+                await self._ensure_redis_connection()
+                session = self._get_user_session(user_id)
+
+                # Get relevant messages based on semantic similarity
+                limit = max_messages or self.max_context_messages
+                relevant_messages = session.get_relevant(
+                    message=current_query,
+                    distance_threshold=self.distance_threshold,
+                    limit=limit,
+                )
+
+                # Filter for venue appropriateness if needed
+                filtered_messages = self._filter_for_venue_privacy(
+                    relevant_messages,
+                    current_venue_type=venue_info.get("type", "unknown"),
+                )
+
+                span.set_attribute("relevant_messages.count", len(filtered_messages))
+
+                logger.debug(
+                    f"Retrieved {len(filtered_messages)} relevant conversation messages for user {user_id}"
+                )
+
+                return filtered_messages
+
+        except Exception as e:
+            logger.error(
+                f"Error getting relevant conversation context for user {user_id}: {e}"
+            )
+            return []
+
+    def _filter_for_venue_privacy(
+        self, messages: List[Dict[str, Any]], current_venue_type: str
+    ) -> List[Dict[str, Any]]:
+        """Filter conversation context based on venue privacy rules"""
+        filtered = []
+
+        for message in messages:
+            metadata = message.get("metadata", {})
+            message_venue = metadata.get("venue_type", "unknown")
+
+            # Privacy rule: Don't leak DM context into public channels
+            if current_venue_type == "channel" and message_venue == "dm":
+                # Skip DM messages when responding in public channels
+                # unless explicitly marked as public-safe
+                if not metadata.get("public_safe", False):
+                    continue
+
+            # All other combinations are allowed
+            filtered.append(message)
+
+        return filtered
+
+    async def get_conversation_history_for_prompt(
+        self,
+        user_id: str,
+        current_query: str,
+        venue_info: Dict[str, Any],
+        max_messages: Optional[int] = None,
+    ) -> List[Dict[str, str]]:
+        """Get conversation history formatted for chat completion messages"""
+        relevant_messages = await self.get_relevant_conversation_context(
+            user_id, current_query, venue_info, max_messages
+        )
+
+        # Convert to OpenAI chat format
+        formatted_messages = []
+        for msg in relevant_messages:
+            # Only include role and content for the chat completion
+            formatted_messages.append(
+                {"role": msg.get("role", "user"), "content": msg.get("content", "")}
+            )
+
+        return formatted_messages
+
+    async def clear_user_session(self, user_id: str) -> None:
+        """Clear all conversation history for a user"""
+        try:
+            if user_id in self.user_sessions:
+                session = self.user_sessions[user_id]
+                session.clear()
+                logger.info(f"Cleared conversation session for user {user_id}")
+        except Exception as e:
+            logger.error(f"Error clearing session for user {user_id}: {e}")
+
+    async def get_session_stats(self, user_id: str) -> Dict[str, Any]:
+        """Get statistics about a user's conversation session"""
+        try:
+            await self._ensure_redis_connection()
+            session = self._get_user_session(user_id)
+
+            # Get all messages to analyze
+            all_messages = session.get_relevant(
+                message="",  # Empty query to get all messages
+                distance_threshold=1.0,  # Max threshold to get everything
+                limit=1000,  # Large limit
+            )
+
+            stats: Dict[str, Any] = {
+                "total_messages": len(all_messages),
+                "user_messages": len(
+                    [m for m in all_messages if m.get("role") == "user"]
+                ),
+                "bot_messages": len(
+                    [m for m in all_messages if m.get("role") == "assistant"]
+                ),
+                "venue_breakdown": {},
+                "oldest_message": None,
+                "newest_message": None,
+            }
+
+            # Analyze venues and timestamps
+            timestamps = []
+            for msg in all_messages:
+                metadata = msg.get("metadata", {})
+                venue = metadata.get("venue_type", "unknown")
+
+                if venue in stats["venue_breakdown"]:
+                    stats["venue_breakdown"][venue] += 1
+                else:
+                    stats["venue_breakdown"][venue] = 1
+
+                if "timestamp" in metadata:
+                    timestamps.append(metadata["timestamp"])
+
+            if timestamps:
+                stats["oldest_message"] = datetime.fromtimestamp(
+                    min(timestamps)
+                ).isoformat()
+                stats["newest_message"] = datetime.fromtimestamp(
+                    max(timestamps)
+                ).isoformat()
+
+            return stats
+
+        except Exception as e:
+            logger.error(f"Error getting session stats for user {user_id}: {e}")
+            return {"error": str(e)}
+
+    async def close(self) -> None:
+        """Close Redis connections and cleanup"""
+        if self.redis_client:
+            await self.redis_client.close()
+        if self.sync_redis_client:
+            self.sync_redis_client.close()
+
+        self.user_sessions.clear()
+        logger.info("Conversation session manager closed")

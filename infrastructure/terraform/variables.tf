@@ -54,6 +54,12 @@ variable "openai_api_key" {
   default     = ""
 }
 
+variable "max_response_tokens" {
+  description = "Maximum tokens for AI responses"
+  type        = string
+  default     = "3000"
+}
+
 variable "slack_bot_token" {
   description = "Slack bot token"
   type        = string

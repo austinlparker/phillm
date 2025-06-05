@@ -1,5 +1,6 @@
 import os
 import asyncio
+import time
 from datetime import datetime, timedelta
 from typing import List, Dict, Any, Optional, Tuple
 from slack_bolt.async_app import AsyncApp
@@ -10,6 +11,7 @@ from phillm.ai.embeddings import EmbeddingService
 from phillm.ai.completions import CompletionService
 from phillm.vector.redis_vector_store import RedisVectorStore
 from phillm.memory import ConversationMemory, MemoryType, MemoryImportance
+from phillm.conversation import ConversationSessionManager
 from phillm.user import UserManager
 from phillm.api.debug import update_stats, add_error
 from phillm.telemetry import get_tracer, telemetry
@@ -30,9 +32,12 @@ class SlackBot:
         self.completion_service = CompletionService()
         self.vector_store = RedisVectorStore()
 
-        # Initialize memory system
+        # Initialize memory system (legacy - keeping for other features)
         self.memory = ConversationMemory()
         self.memory.set_embedding_service(self.embedding_service)
+
+        # Initialize new conversation session manager
+        self.conversation_sessions = ConversationSessionManager()
 
         # Initialize user manager
         self.user_manager = UserManager(self.app.client)
@@ -167,13 +172,23 @@ class SlackBot:
                     last_mention_received=datetime.now().isoformat(),
                 )
 
-                # Get conversation context from memory for mentions
-                conversation_context = None
+                # Get conversation context from session manager for mentions
+                conversation_history = []
                 user_display_name = None
                 if user_id:
-                    conversation_context = await self.memory.get_conversation_context(
-                        user_id, limit=2
+                    venue_info = {
+                        "type": "channel",
+                        "channel_id": channel_id,
+                        "timestamp": time.time(),
+                    }
+
+                    conversation_history = await self.conversation_sessions.get_conversation_history_for_prompt(
+                        user_id=user_id,
+                        current_query=message_text,
+                        venue_info=venue_info,
+                        max_messages=4,  # Fewer messages for public channels
                     )
+
                     user_display_name = await self.user_manager.get_user_display_name(
                         user_id
                     )
@@ -187,7 +202,7 @@ class SlackBot:
                 response, query_embedding = await self._generate_ai_response(
                     message_text,
                     is_dm=False,  # This is a channel mention, not a DM
-                    conversation_context=conversation_context,
+                    conversation_history=conversation_history,
                     requester_display_name=user_display_name,
                 )
 
@@ -202,8 +217,24 @@ class SlackBot:
                     channel=channel_id, timestamp=event.get("ts"), name="thinking_face"
                 )
 
-                # Store the mention interaction in memory asynchronously (don't await)
+                # Store the mention interaction in session manager
                 if user_id:
+                    mention_venue_info = {
+                        "type": "channel",
+                        "channel_id": channel_id,
+                        "timestamp": time.time(),
+                    }
+
+                    asyncio.create_task(
+                        self.conversation_sessions.add_conversation_turn(
+                            user_id=user_id,
+                            user_message=message_text,
+                            bot_response=response,
+                            venue_info=mention_venue_info,
+                        )
+                    )
+
+                    # Also store in legacy memory system
                     asyncio.create_task(
                         self.memory.store_memory(
                             user_id=user_id,
@@ -273,9 +304,18 @@ class SlackBot:
                     dm_conversations=1, last_dm_received=datetime.now().isoformat()
                 )
 
-                # Get conversation context from memory
-                conversation_context = await self.memory.get_conversation_context(
-                    user_id, limit=3
+                # Get relevant conversation history from session manager
+                venue_info = {
+                    "type": "dm",
+                    "channel_id": channel_id,
+                    "timestamp": time.time(),
+                }
+
+                conversation_history = await self.conversation_sessions.get_conversation_history_for_prompt(
+                    user_id=user_id,
+                    current_query=message_text,
+                    venue_info=venue_info,
+                    max_messages=6,  # Get up to 6 relevant conversation messages
                 )
 
                 # Get user's display name
@@ -292,11 +332,11 @@ class SlackBot:
                     channel=channel_id, timestamp=event.get("ts"), name="thinking_face"
                 )
 
-                # Generate AI response
+                # Generate AI response using new conversation history
                 response, query_embedding = await self._generate_ai_response(
                     message_text,
                     is_dm=True,
-                    conversation_context=conversation_context,
+                    conversation_history=conversation_history,
                     requester_display_name=user_display_name,
                 )
 
@@ -313,7 +353,17 @@ class SlackBot:
                     channel=channel_id, timestamp=event.get("ts"), name="thinking_face"
                 )
 
-                # Store the DM interaction in memory asynchronously (don't await)
+                # Store the conversation turn in new session manager
+                asyncio.create_task(
+                    self.conversation_sessions.add_conversation_turn(
+                        user_id=user_id,
+                        user_message=message_text,
+                        bot_response=response,
+                        venue_info=venue_info,
+                    )
+                )
+
+                # Also store in legacy memory system for other features (async)
                 asyncio.create_task(
                     self.memory.store_dm_interaction(
                         user_id, message_text, response, channel_id, query_embedding
@@ -355,7 +405,7 @@ class SlackBot:
         self,
         query: str,
         is_dm: bool = False,
-        conversation_context: Optional[str] = None,
+        conversation_history: Optional[List[Dict[str, str]]] = None,
         requester_display_name: Optional[str] = None,
     ) -> Tuple[str, List[float]]:
         # Create embedding once and reuse it
@@ -439,7 +489,7 @@ class SlackBot:
             similar_messages=similar_messages,
             user_id=self.target_user_id,
             is_dm=is_dm,
-            conversation_context=conversation_context,
+            conversation_history=conversation_history,
             requester_display_name=requester_display_name,
         )
 
@@ -1078,4 +1128,5 @@ class SlackBot:
         await self.handler.close_async()
         await self.vector_store.close()
         await self.memory.close()
+        await self.conversation_sessions.close()
         await self.user_manager.close()

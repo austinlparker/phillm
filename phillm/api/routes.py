@@ -394,8 +394,18 @@ async def chat_with_ai_twin(request: ChatRequest) -> ChatResponse:
         if not user_id:
             raise HTTPException(status_code=400, detail="No target user configured")
 
-        # Get conversation context from memory
-        conversation_context = await memory.get_conversation_context(user_id, limit=3)
+        # Get conversation context from memory (convert to message format)
+        conversation_context_str = await memory.get_conversation_context(
+            user_id, limit=3
+        )
+
+        # Convert string context to message format for compatibility
+        conversation_history = []
+        if conversation_context_str and conversation_context_str.strip():
+            # Simple conversion - treat as user message for now
+            conversation_history = [
+                {"role": "user", "content": conversation_context_str}
+            ]
 
         # Find similar messages for context
         similar_messages = await vector_store.find_similar_messages(
@@ -426,7 +436,7 @@ async def chat_with_ai_twin(request: ChatRequest) -> ChatResponse:
             similar_messages=similar_messages,
             user_id=user_id,
             is_dm=True,
-            conversation_context=conversation_context,
+            conversation_history=conversation_history,
             requester_display_name=requester_display_name,
         )
 

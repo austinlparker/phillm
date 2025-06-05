@@ -10,6 +10,9 @@ class CompletionService:
     def __init__(self) -> None:
         self.client = openai.AsyncOpenAI(api_key=os.getenv("OPENAI_API_KEY"))
         self.model = os.getenv("OPENAI_MODEL", "gpt-4.1-mini")  # Configurable model
+        self.max_response_tokens = int(
+            os.getenv("MAX_RESPONSE_TOKENS", "3000")
+        )  # Configurable response length
 
     async def generate_response(
         self,
@@ -18,7 +21,7 @@ class CompletionService:
         user_id: str,
         is_dm: bool = False,
         temperature: float = 0.8,
-        conversation_context: Optional[str] = None,
+        conversation_history: Optional[List[Dict[str, str]]] = None,
         requester_display_name: Optional[str] = None,
     ) -> str:
         tracer = get_tracer()
@@ -32,15 +35,20 @@ class CompletionService:
                 span.set_attribute("is_dm", is_dm)
                 span.set_attribute("temperature", temperature)
                 span.set_attribute("model", self.model)
+                span.set_attribute("max_response_tokens", self.max_response_tokens)
                 span.set_attribute("examples.count", len(similar_messages))
 
+                # Build system prompt (style instructions only)
                 system_prompt = self._build_system_prompt(
                     user_id,
                     similar_messages,
-                    query,
                     is_dm,
-                    conversation_context,
                     requester_display_name,
+                )
+
+                # Build message history for conversation context
+                messages = self._build_messages(
+                    system_prompt, conversation_history or [], query
                 )
                 span.set_attribute("prompt.length", len(system_prompt))
                 span.set_attribute("system_prompt.full", system_prompt)
@@ -58,18 +66,15 @@ class CompletionService:
                     )
                     span.set_attribute(f"example.{i}.length", len(msg["message"]))
 
-                # Add conversation context and requester info to telemetry
+                # Add conversation history and requester info to telemetry
                 span.set_attribute(
-                    "conversation_context.length",
-                    len(conversation_context) if conversation_context else 0,
+                    "conversation_history.length",
+                    len(conversation_history) if conversation_history else 0,
                 )
                 span.set_attribute(
                     "requester_display_name", requester_display_name or ""
                 )
-                if conversation_context:
-                    span.set_attribute(
-                        "conversation_context.preview", conversation_context[:200]
-                    )
+                span.set_attribute("messages.total_count", len(messages))
 
                 # Note: Full prompt and response content will be automatically captured
                 # by OpenAI instrumentation when OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT=true
@@ -79,13 +84,12 @@ class CompletionService:
                     f"🎯 Using {len(similar_messages)} examples for user {user_id}"
                 )
 
-                # Debug: Log conversation context and requester info
+                # Debug: Log conversation history and requester info
                 logger.debug(
-                    f"💬 Conversation context length: {len(conversation_context) if conversation_context else 0}"
+                    f"💬 Conversation history messages: {len(conversation_history) if conversation_history else 0}"
                 )
+                logger.debug(f"💬 Total messages in request: {len(messages)}")
                 logger.debug(f"👤 Requester display name: '{requester_display_name}'")
-                if conversation_context:
-                    logger.debug(f"💬 Context preview: {conversation_context[:100]}...")
 
                 if similar_messages:
                     top_examples = [
@@ -101,15 +105,12 @@ class CompletionService:
                             f"  {i + 1}. (sim: {msg.get('similarity', 0):.3f}) {msg['message'][:80]}..."
                         )
 
-                # Create non-streaming response
+                # Create non-streaming response with conversation history
                 response = await self.client.chat.completions.create(
                     model=self.model,
-                    messages=[
-                        {"role": "system", "content": system_prompt},
-                        {"role": "user", "content": query},
-                    ],
+                    messages=messages,  # type: ignore[arg-type]
                     temperature=temperature,
-                    max_tokens=300,
+                    max_tokens=self.max_response_tokens,
                     top_p=0.9,  # Slightly more focused for style consistency
                     frequency_penalty=0.1,  # Reduce repetition but allow natural patterns
                     presence_penalty=0.1,  # Light penalty to maintain style consistency
@@ -144,9 +145,7 @@ class CompletionService:
         self,
         user_id: str,
         similar_messages: List[Dict[str, Any]],
-        query: str,
         is_dm: bool = False,
-        conversation_context: Optional[str] = None,
         requester_display_name: Optional[str] = None,
     ) -> str:
         """Build prompt using many-shot in-context learning with actual examples"""
@@ -181,20 +180,9 @@ class CompletionService:
 
         context_note = "DM conversation" if is_dm else "public channel conversation"
 
-        # Add conversation context if available
-        context_section = ""
-        if conversation_context and conversation_context.strip():
-            context_section = f"""
-
-Recent conversation context:
-{conversation_context}
-
-This context shows your recent interactions. Use it to maintain conversation continuity and context awareness."""
-
-        # Add requester name information
+        # Add requester name information (conversation context now handled via message history)
         requester_section = ""
         if requester_display_name:
-            # Always include the requester info if we have a name, even if it's just a user ID
             requester_section = f"""
 
 The person messaging you is {requester_display_name}. You can refer to them by name in your response to make it more personal and natural."""
@@ -224,24 +212,43 @@ Respond to messages using this style without altering the underlying topic.
 - Match Phillip's personality and energy exactly as shown in the examples
 - Stay focused on the conversation topic without introducing new subjects
 
-{context_section}{requester_section}
+{requester_section}
 
 # Notes
 
 - This is a {context_note}
 - Refer to people by name when appropriate for a personal touch
-- Stay aware of the conversation context provided
+- Use the conversation history provided in the message thread to maintain context
 - Ensure responses maintain Phillip's style without shifting the conversation's topic
 
-Respond exactly as Phillip would:"""
+Respond exactly as Phillip would to continue the conversation naturally."""
 
         # Debug: Log sections of the prompt for debugging
         logger.debug(
-            f"🎭 Built prompt with context_section: {bool(context_section)}, requester_section: {bool(requester_section)}"
+            f"🎭 Built prompt with requester_section: {bool(requester_section)}"
         )
         logger.debug(f"🎭 Final prompt length: {len(prompt)} chars")
 
         return prompt
+
+    def _build_messages(
+        self,
+        system_prompt: str,
+        conversation_history: List[Dict[str, str]],
+        current_query: str,
+    ) -> List[Dict[str, str]]:
+        """Build the complete message structure for chat completion"""
+
+        # Start with system prompt
+        messages = [{"role": "system", "content": system_prompt}]
+
+        # Add conversation history (already filtered for relevance and privacy)
+        messages.extend(conversation_history)
+
+        # Add current user query
+        messages.append({"role": "user", "content": current_query})
+
+        return messages
 
     async def generate_scheduled_message(
         self, context: str, user_id: str, topic: Optional[str] = None
@@ -253,7 +260,7 @@ Respond exactly as Phillip would:"""
                 model=self.model,
                 messages=[{"role": "user", "content": prompt}],
                 temperature=0.8,
-                max_tokens=300,
+                max_tokens=self.max_response_tokens,
             )
 
             generated_message = response.choices[0].message.content or ""

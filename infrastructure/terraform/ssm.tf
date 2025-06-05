@@ -144,3 +144,15 @@ resource "aws_ssm_parameter" "scrape_channels" {
     ignore_changes = [value]
   }
 }
+
+resource "aws_ssm_parameter" "max_response_tokens" {
+  name      = "/${var.project_name}/max_response_tokens"
+  type      = "String"
+  value     = var.max_response_tokens
+  overwrite = true
+
+  tags = {
+    Environment = var.environment
+    Application = var.project_name
+  }
+}

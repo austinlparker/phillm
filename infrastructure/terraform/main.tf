@@ -124,14 +124,14 @@ resource "aws_security_group" "ecs_tasks" {
     from_port       = 3000
     to_port         = 3000
     protocol        = "tcp"
-    security_groups = [aws_security_group.alb.id]  # Only ALB can reach app
+    security_groups = [aws_security_group.alb.id] # Only ALB can reach app
   }
 
   egress {
     from_port   = 0
     to_port     = 0
     protocol    = "-1"
-    cidr_blocks = ["0.0.0.0/0"]  # App needs internet for APIs, image pulls
+    cidr_blocks = ["0.0.0.0/0"] # App needs internet for APIs, image pulls
   }
 
   tags = {
@@ -156,7 +156,7 @@ resource "aws_security_group" "redis" {
     from_port   = 0
     to_port     = 0
     protocol    = "-1"
-    cidr_blocks = ["0.0.0.0/0"]  # Redis needs egress for pulling images
+    cidr_blocks = ["0.0.0.0/0"] # Redis needs egress for pulling images
   }
 
   tags = {
@@ -169,7 +169,7 @@ resource "aws_security_group" "redis" {
 resource "aws_ecr_repository" "phillm" {
   name                 = var.project_name
   image_tag_mutability = "MUTABLE"
-  force_delete         = true  # Allow deletion even with images present
+  force_delete         = true # Allow deletion even with images present
 
   image_scanning_configuration {
     scan_on_push = true
@@ -186,7 +186,7 @@ resource "aws_efs_file_system" "redis" {
   encrypted      = true
 
   performance_mode = "generalPurpose"
-  throughput_mode  = "bursting"  # Changed from provisioned to save ~$15/month
+  throughput_mode  = "bursting" # Changed from provisioned to save ~$15/month
 
   tags = {
     Name        = "${var.project_name}-redis-efs"
@@ -196,7 +196,7 @@ resource "aws_efs_file_system" "redis" {
 
 resource "aws_efs_mount_target" "redis" {
   file_system_id  = aws_efs_file_system.redis.id
-  subnet_id       = aws_subnet.public[0].id  # Use first public subnet
+  subnet_id       = aws_subnet.public[0].id # Use first public subnet
   security_groups = [aws_security_group.efs.id]
 }
 
@@ -308,8 +308,8 @@ resource "aws_ecs_service" "redis" {
 
   network_configuration {
     security_groups  = [aws_security_group.redis.id]
-    subnets          = [aws_subnet.public[0].id]  # Use first public subnet
-    assign_public_ip = true  # Direct internet access, no NAT Gateway needed
+    subnets          = [aws_subnet.public[0].id] # Use first public subnet
+    assign_public_ip = true                      # Direct internet access, no NAT Gateway needed
   }
 
   # Enable service discovery
@@ -405,7 +405,7 @@ resource "aws_ecs_cluster" "main" {
 
   setting {
     name  = "containerInsights"
-    value = "disabled"  # Disabled to save costs - can enable if needed
+    value = "disabled" # Disabled to save costs - can enable if needed
   }
 
   tags = {
@@ -479,6 +479,10 @@ resource "aws_ecs_task_definition" "phillm" {
         {
           name      = "SCRAPE_CHANNELS"
           valueFrom = aws_ssm_parameter.scrape_channels.arn
+        },
+        {
+          name      = "MAX_RESPONSE_TOKENS"
+          valueFrom = aws_ssm_parameter.max_response_tokens.arn
         }
       ]
 
@@ -510,8 +514,8 @@ resource "aws_ecs_service" "phillm" {
 
   network_configuration {
     security_groups  = [aws_security_group.ecs_tasks.id]
-    subnets          = aws_subnet.public[*].id  # Can use multiple subnets for better availability
-    assign_public_ip = true  # Still need public IP for outbound internet access
+    subnets          = aws_subnet.public[*].id # Can use multiple subnets for better availability
+    assign_public_ip = true                    # Still need public IP for outbound internet access
   }
 
   load_balancer {
@@ -530,7 +534,7 @@ resource "aws_ecs_service" "phillm" {
 # CloudWatch Log Groups - with shorter retention to save costs
 resource "aws_cloudwatch_log_group" "phillm" {
   name              = "/ecs/${var.project_name}"
-  retention_in_days = 7  # Reduced from 14+ days to save costs
+  retention_in_days = 7 # Reduced from 14+ days to save costs
 
   tags = {
     Environment = var.environment
@@ -539,7 +543,7 @@ resource "aws_cloudwatch_log_group" "phillm" {
 
 resource "aws_cloudwatch_log_group" "redis" {
   name              = "/ecs/${var.project_name}-redis"
-  retention_in_days = 7  # Reduced from 14+ days to save costs
+  retention_in_days = 7 # Reduced from 14+ days to save costs
 
   tags = {
     Environment = var.environment

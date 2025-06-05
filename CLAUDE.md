@@ -70,7 +70,10 @@ uv run pytest tests/test_specific.py  # Single test file
 ### Environment Configuration
 Copy `.env.example` to `.env` and configure:
 - Slack bot token and signing secret
-- OpenAI API key
+- OpenAI API key and model settings
+  - `OPENAI_API_KEY`: Your OpenAI API key
+  - `OPENAI_MODEL`: Model to use (default: "gpt-4.1-mini")
+  - `MAX_RESPONSE_TOKENS`: Maximum tokens for AI responses (default: 3000)
 - Redis connection details
 - Honeycomb API key for observability
 - Set `OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT=true` to capture full OpenAI prompts and responses in telemetry

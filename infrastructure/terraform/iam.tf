@@ -156,7 +156,7 @@ data "aws_iam_openid_connect_provider" "github" {
 # OIDC Provider for GitHub Actions (only create if it doesn't exist)
 resource "aws_iam_openid_connect_provider" "github" {
   count = length(data.aws_iam_openid_connect_provider.github.arn) > 0 ? 0 : 1
-  
+
   url = "https://token.actions.githubusercontent.com"
 
   client_id_list = [

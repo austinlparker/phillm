@@ -619,7 +619,7 @@ class ConversationMemory:
                 if len(type_values) == 1:
                     search_query += f" @memory_type:{{{type_values[0]}}}"
                 else:
-                    type_query = "|".join([f"{{{t}}}" for t in type_values])
+                    type_query = "|".join(type_values)
                     search_query += f" @memory_type:({type_query})"
 
             # Execute text search
@@ -669,7 +669,7 @@ class ConversationMemory:
                 if len(type_values) == 1:
                     search_query += f" @memory_type:{{{type_values[0]}}}"
                 else:
-                    type_query = "|".join([f"{{{t}}}" for t in type_values])
+                    type_query = "|".join(type_values)
                     search_query += f" @memory_type:({type_query})"
 
             # Execute search sorted by timestamp (newest first)

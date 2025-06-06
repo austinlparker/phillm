@@ -185,7 +185,7 @@ class CompletionService:
         if requester_display_name:
             requester_section = f"""
 
-The person messaging you is {requester_display_name}. You can refer to them by name in your response to make it more personal and natural."""
+The person messaging you is {requester_display_name}. Use their name naturally only when it feels appropriate, not in every response."""
 
         prompt = f"""Your task is to perform style transfer while limiting topic transfer in conversations. As PhiLLM, your goal is to mimic Phillip's unique style while keeping topics consistent when responding to messages.
 
@@ -217,7 +217,7 @@ Respond to messages using this style without altering the underlying topic.
 # Notes
 
 - This is a {context_note}
-- Refer to people by name when appropriate for a personal touch
+- Use names naturally and sparingly - not in every response unless Phillip's style shows frequent name usage
 - Use the conversation history provided in the message thread to maintain context
 - Ensure responses maintain Phillip's style without shifting the conversation's topic
 

@@ -160,14 +160,21 @@ class TestConversationSessionManager:
 
     def test_session_caching(self, session_manager):
         """Test that user sessions are properly cached"""
-        # Get session for first time
-        session1 = session_manager._get_user_session("test_user")
+        # Mock the vectorizer creation to avoid real OpenAI API calls
+        with patch(
+            "phillm.conversation.session_manager.OpenAITextVectorizer"
+        ) as mock_vectorizer_class:
+            mock_vectorizer = MagicMock()
+            mock_vectorizer_class.return_value = mock_vectorizer
 
-        # Get session for second time - should be same instance
-        session2 = session_manager._get_user_session("test_user")
+            # Get session for first time
+            session1 = session_manager._get_user_session("test_user")
 
-        assert session1 is session2
-        assert "test_user" in session_manager.user_sessions
+            # Get session for second time - should be same instance
+            session2 = session_manager._get_user_session("test_user")
+
+            assert session1 is session2
+            assert "test_user" in session_manager.user_sessions
 
     @pytest.mark.asyncio
     async def test_session_stats(self, session_manager):

@@ -9,8 +9,6 @@ from loguru import logger
 
 from phillm.ai.embeddings import EmbeddingService
 from phillm.ai.completions import CompletionService
-from phillm.vector.redis_vector_store import RedisVectorStore
-from phillm.memory import ConversationMemory, MemoryType, MemoryImportance
 from phillm.conversation import ConversationSessionManager
 from phillm.user import UserManager
 from phillm.api.debug import update_stats, add_error
@@ -30,13 +28,8 @@ class SlackBot:
 
         self.embedding_service = EmbeddingService()
         self.completion_service = CompletionService()
-        self.vector_store = RedisVectorStore()
 
-        # Initialize memory system (legacy - keeping for other features)
-        self.memory = ConversationMemory()
-        self.memory.set_embedding_service(self.embedding_service)
-
-        # Initialize new conversation session manager
+        # Initialize conversation session manager
         self.conversation_sessions = ConversationSessionManager()
 
         # Initialize user manager
@@ -109,7 +102,6 @@ class SlackBot:
     async def _process_target_user_message(self, event):
         message_text = event.get("text", "")
         channel_id = event.get("channel")
-        timestamp = event.get("ts")
 
         if not self.target_user_id:
             logger.error("Target user ID not configured")
@@ -117,22 +109,16 @@ class SlackBot:
 
         try:
             update_stats(last_api_call=datetime.now().isoformat())
-            embedding = await self.embedding_service.create_embedding(message_text)
 
-            await self.vector_store.store_message(
-                user_id=self.target_user_id,
-                channel_id=channel_id,
-                message=message_text,
-                embedding=embedding,
-                timestamp=timestamp,
-            )
+            # Note: Target user message scraping is no longer needed as we're using
+            # conversation sessions for memory management
 
             # Record metrics
             telemetry.record_message_scraped(channel_id, self.target_user_id)
 
             # Update stats
             update_stats(total_messages_processed=1)
-            logger.info(f"Stored message from target user: {message_text[:50]}...")
+            logger.info(f"Processed message from target user: {message_text[:50]}...")
 
         except Exception as e:
             error_msg = f"Error processing target user message: {e}"
@@ -231,23 +217,6 @@ class SlackBot:
                             user_message=message_text,
                             bot_response=response,
                             venue_info=mention_venue_info,
-                        )
-                    )
-
-                    # Also store in legacy memory system
-                    asyncio.create_task(
-                        self.memory.store_memory(
-                            user_id=user_id,
-                            memory_type=MemoryType.CHANNEL_INTERACTION,
-                            content=f"User mentioned bot: {message_text}\nBot responded: {response}",
-                            context={
-                                "channel_id": channel_id,
-                                "interaction_type": "mention",
-                                "user_message": message_text,
-                                "bot_response": response,
-                                "query_embedding": query_embedding,
-                            },
-                            importance=MemoryImportance.HIGH,  # Mentions are important
                         )
                     )
 
@@ -363,13 +332,6 @@ class SlackBot:
                     )
                 )
 
-                # Also store in legacy memory system for other features (async)
-                asyncio.create_task(
-                    self.memory.store_dm_interaction(
-                        user_id, message_text, response, channel_id, query_embedding
-                    )
-                )
-
                 # Record metrics
                 telemetry.record_dm_processed(user_id, len(response))
 
@@ -414,76 +376,22 @@ class SlackBot:
         embedding_service = EmbeddingService()
         query_embedding = await embedding_service.create_embedding(query)
 
-        # Try with moderate threshold first for better quality examples
-        # Use fewer examples but prioritize quality for better style transfer
+        # Note: Style mimicking via vector similarity search has been removed
+        # as we're now using conversation sessions for context.
+        # The AI will rely on conversation history and system prompts for style.
+
         if not self.target_user_id:
             logger.error("Target user ID not configured")
             return "", []
 
-        similar_messages = await self.vector_store.find_similar_messages(
-            query, user_id=self.target_user_id, limit=8, threshold=0.35
-        )
+        # Use empty similar messages list - conversation context provides the style
+        similar_messages: List[Dict[str, Any]] = []
 
-        # If we get very few results, try with lower threshold
-        if len(similar_messages) < 3:
-            logger.info(
-                f"🔄 Only {len(similar_messages)} messages found with 0.35 threshold, trying lower threshold"
-            )
-            similar_messages = await self.vector_store.find_similar_messages(
-                query, user_id=self.target_user_id, limit=8, threshold=0.2
-            )
-
-        # If still no results, get recent messages as fallback
-        if not similar_messages:
-            logger.info(
-                "🔄 No similar messages found, using recent messages as fallback"
-            )
-            recent_messages = await self.vector_store.get_recent_messages(
-                self.target_user_id, limit=8
-            )
-            # Convert to similar format
-            similar_messages = [
-                {"message": msg["message"], "similarity": 0.0}
-                for msg in recent_messages
-            ]
-
-        # Improve example selection for style transfer
-        query_length = len(query)
-
-        # Filter examples to better match query context and length
-        if similar_messages:
-            # Prefer examples with similar length for better style matching
-            length_filtered = []
-            other_examples = []
-
-            for msg in similar_messages:
-                msg_length = len(msg["message"])
-                # Consider messages within 2x of query length as "similar length"
-                if query_length // 2 <= msg_length <= query_length * 2:
-                    length_filtered.append(msg)
-                else:
-                    other_examples.append(msg)
-
-            # Use length-similar examples first, then fill with others
-            similar_messages = length_filtered[:6] + other_examples[:2]
-
-        # Debug: Log similarity search results
         logger.info(
-            f"🔍 Found {len(similar_messages)} messages for query: {query[:50]}... (query_length: {query_length})"
+            f"🔍 Generating response for query: {query[:50]}... using conversation context"
         )
-        for i, msg in enumerate(similar_messages[:3]):  # Log top 3
-            similarity = msg.get("similarity", 0)
-            msg_length = len(msg["message"])
-            preview = (
-                msg["message"][:60] + "..."
-                if len(msg["message"]) > 60
-                else msg["message"]
-            )
-            logger.debug(
-                f"  #{i + 1} (sim: {similarity:.3f}, len: {msg_length}): {preview}"
-            )
 
-        # Pass similar messages directly for many-shot learning
+        # Pass conversation history for context-aware responses
         response = await self.completion_service.generate_response(
             query=query,
             similar_messages=similar_messages,
@@ -500,35 +408,19 @@ class SlackBot:
         try:
             user_id = event.get("user")
             message_text = event.get("text", "")
-            channel_id = event.get("channel")
 
             if not user_id or not message_text.strip():
                 return
 
-            # Get channel name for better context
-            channel_name = None
-            try:
-                channel_info = await self.app.client.conversations_info(
-                    channel=channel_id
-                )
-                channel_name = channel_info.get("channel", {}).get("name", channel_id)  # type: ignore[call-overload]
-            except Exception:
-                channel_name = channel_id
-
-            # Store the interaction
-            await self.memory.store_channel_interaction(
-                user_id=user_id,
-                message=message_text,
-                channel_id=channel_id,
-                channel_name=channel_name,
-            )
+            # Note: Channel interaction memory is now handled by conversation sessions
+            # This method is kept for backwards compatibility but no longer stores data
 
             logger.debug(
-                f"Stored channel interaction memory for user {user_id} in #{channel_name}"
+                f"Channel interaction noted for user {user_id} (handled by conversation sessions)"
             )
 
         except Exception as e:
-            logger.error(f"Error storing channel interaction memory: {e}")
+            logger.error(f"Error processing channel interaction: {e}")
 
     async def check_scraping_completeness_simple(
         self, channel_id: str
@@ -542,10 +434,9 @@ class SlackBot:
                     "needs_scraping": True,
                 }
 
-            # Get the oldest message we have stored for this user in this channel
-            oldest_stored = await self.vector_store.get_oldest_stored_message(
-                self.target_user_id, channel_id
-            )
+            # Note: Completeness checking disabled as we no longer use vector store for scraping
+            # Conversation sessions handle memory automatically
+            oldest_stored = None
 
             if not oldest_stored:
                 return {
@@ -638,10 +529,9 @@ class SlackBot:
                     "needs_scraping": True,
                 }
 
-            # Get the oldest message we have stored for this user in this channel
-            oldest_stored = await self.vector_store.get_oldest_stored_message(
-                self.target_user_id, channel_id
-            )
+            # Note: Completeness checking disabled as we no longer use vector store for scraping
+            # Conversation sessions handle memory automatically
+            oldest_stored = None
 
             if not oldest_stored:
                 return {
@@ -864,8 +754,8 @@ class SlackBot:
 
             # Check for existing scraping state
             assert channel_id is not None  # Should be resolved by this point
-            scrape_state = await self.vector_store.get_scrape_state(channel_id)
-            cursor = scrape_state.get("cursor")
+            # Note: Scraping state management disabled as vector store is no longer used
+            cursor = None
             oldest = None
             if days_back:
                 oldest = str((datetime.now() - timedelta(days=days_back)).timestamp())
@@ -956,15 +846,8 @@ class SlackBot:
                         sub_batch = target_messages_in_batch[i : i + sub_batch_size]
 
                         for message in sub_batch:
-                            # Check if message already exists
-                            if await self.vector_store.message_exists(
-                                self.target_user_id, message["ts"], channel_id
-                            ):
-                                skipped_existing_messages += 1
-                                logger.debug(
-                                    f"Skipping existing message: {message['ts']}"
-                                )
-                                continue
+                            # Note: Message existence checking disabled as vector store is no longer used
+                            # All messages will be processed
 
                             try:
                                 await self._process_target_user_message(
@@ -987,14 +870,8 @@ class SlackBot:
                     f"Batch complete: {total_target_messages_processed} processed, {skipped_existing_messages} skipped, from {total_messages_fetched} total messages"
                 )
 
-                # Save scraping state after each batch with better tracking
-                last_message_ts = messages[-1]["ts"] if messages else None
-                oldest_in_batch = messages[0]["ts"] if messages else None
-
-                assert channel_id is not None  # Should be set by this point
-                await self.vector_store.save_scrape_state(
-                    channel_id, next_cursor, last_message_ts, oldest_in_batch
-                )
+                # Note: Scraping state saving disabled as vector store is no longer used
+                pass
 
                 # Improved pagination: use has_more AND cursor presence
                 if not has_more or not next_cursor:
@@ -1016,9 +893,8 @@ class SlackBot:
                 f"✅ Scraping complete! Processed {total_target_messages_processed} new messages, skipped {skipped_existing_messages} existing messages, from {total_messages_fetched} total messages"
             )
 
-            # Clear scraping state when complete
-            assert channel_id is not None  # Should be set by this point
-            await self.vector_store.clear_scrape_state(channel_id)
+            # Note: Scraping state clearing disabled as vector store is no longer used
+            pass
 
             update_stats(
                 last_scrape_completed=datetime.now().isoformat(),
@@ -1126,7 +1002,5 @@ class SlackBot:
     async def stop(self):
         logger.info("Stopping Slack bot...")
         await self.handler.close_async()
-        await self.vector_store.close()
-        await self.memory.close()
         await self.conversation_sessions.close()
         await self.user_manager.close()

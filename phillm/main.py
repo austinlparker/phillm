@@ -24,37 +24,10 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     global slack_bot
     slack_bot = SlackBot()
 
-    # Try to initialize vector index with retries
+    # Initialize conversation sessions and bot
     import asyncio
 
     logger.info("🚀 Starting PhiLLM application...")
-
-    async def initialize_with_retries() -> None:
-        max_attempts = 10
-        retry_delay = 5
-
-        for attempt in range(max_attempts):
-            try:
-                logger.info(
-                    f"Attempting to initialize Redis vector index (attempt {attempt + 1}/{max_attempts})"
-                )
-                await slack_bot.vector_store.initialize_index()
-                logger.info("✅ Redis vector index initialized successfully")
-                break
-            except Exception as e:
-                logger.error(f"Failed to initialize Redis (attempt {attempt + 1}): {e}")
-                if attempt < max_attempts - 1:
-                    logger.info(f"Retrying in {retry_delay} seconds...")
-                    await asyncio.sleep(retry_delay)
-                else:
-                    logger.error(
-                        "❌ All Redis initialization attempts failed - application will be unhealthy"
-                    )
-                    # Don't raise - let the app start but be unhealthy
-                    break
-
-    # Initialize in background so app can start
-    asyncio.create_task(initialize_with_retries())
 
     # Start bot in background - don't wait for initial scraping
     asyncio.create_task(slack_bot.start())
@@ -66,9 +39,6 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     # Shutdown
     if slack_bot:
         await slack_bot.stop()
-        await slack_bot.vector_store.close()
-        await slack_bot.memory.close()
-        await slack_bot.user_manager.close()
 
 
 app = FastAPI(
@@ -87,17 +57,12 @@ app.include_router(debug_router)
 async def root_health_check() -> Dict[str, Any]:
     """Root-level health check for load balancer"""
     try:
-        # Import here to avoid circular imports
-        from phillm.vector.redis_vector_store import RedisVectorStore
-        from fastapi import HTTPException
-
-        vector_store = RedisVectorStore()
-        redis_healthy = await vector_store.health_check()
-        await vector_store.close()
-
-        if redis_healthy:
+        # Check conversation session manager health
+        if slack_bot and slack_bot.conversation_sessions:
             return {"status": "healthy", "service": "PhiLLM", "redis": "connected"}
         else:
+            from fastapi import HTTPException
+
             raise HTTPException(
                 status_code=503,
                 detail={

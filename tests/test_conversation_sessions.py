@@ -8,7 +8,7 @@ class TestConversationSessionManager:
     """Test the new conversation session management system"""
 
     @pytest.fixture
-    async def session_manager(self):
+    def session_manager(self):
         """Create a conversation session manager for testing"""
         manager = ConversationSessionManager()
 

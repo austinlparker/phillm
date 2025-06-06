@@ -349,7 +349,7 @@ async def test_handle_mention_success(slack_bot):
     slack_bot._generate_ai_response.assert_called_once_with(
         "<@UBOT> hello",
         is_dm=False,  # Key difference from DMs
-        conversation_context="Previous context",
+        conversation_history=[],  # Updated to use new parameter name
         requester_display_name="Test User",
     )
 

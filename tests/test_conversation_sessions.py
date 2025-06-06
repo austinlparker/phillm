@@ -162,7 +162,7 @@ class TestConversationSessionManager:
         """Test that user sessions are properly cached"""
         # Mock the vectorizer creation to avoid real OpenAI API calls
         with patch(
-            "phillm.conversation.session_manager.OpenAITextVectorizer"
+            "redisvl.utils.vectorize.text.openai.OpenAITextVectorizer"
         ) as mock_vectorizer_class:
             mock_vectorizer = MagicMock()
             mock_vectorizer_class.return_value = mock_vectorizer

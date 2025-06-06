@@ -121,61 +121,8 @@ class ConversationSessionManager:
                 # Note: SemanticMessageHistory.store() doesn't accept metadata parameter
                 session.store(prompt=user_message, response=bot_response)
 
-                # Get total messages after adding for debugging
-                try:
-                    all_messages_after = session.get_relevant(
-                        prompt="",  # Empty query to get all messages
-                        distance_threshold=1.0,  # Max threshold to get everything
-                        top_k=1000,  # Large limit
-                    )
-                    total_messages_after_add = len(all_messages_after)
-                    span.set_attribute(
-                        "total_messages_after_add", total_messages_after_add
-                    )
-
-                    # Log detailed storage verification
-                    logger.info(
-                        f"🔍 STORAGE VERIFICATION - User {user_id}: {total_messages_after_add} total messages after adding"
-                    )
-                    if all_messages_after:
-                        latest_msg = all_messages_after[-1]  # Get most recent
-                        logger.info(
-                            f"🔍 Latest stored message role: {latest_msg.get('role')}, content preview: {latest_msg.get('content', '')[:50]}..."
-                        )
-
-                        # Test immediate retrieval with the exact same user message
-                        test_retrieval = session.get_relevant(
-                            prompt=user_message,  # Use exact same message
-                            distance_threshold=0.1,  # Very lenient threshold
-                            top_k=5,
-                        )
-                        span.set_attribute(
-                            "immediate_test_retrieval_count", len(test_retrieval)
-                        )
-                        logger.info(
-                            f"🔍 IMMEDIATE TEST - Retrieved {len(test_retrieval)} messages for exact same query with 0.1 threshold"
-                        )
-
-                        if test_retrieval:
-                            for i, msg in enumerate(test_retrieval):
-                                similarity_info = "unknown"
-                                if isinstance(msg, dict) and "metadata" in msg:
-                                    metadata = msg["metadata"]
-                                    if "similarity" in metadata:
-                                        similarity_info = (
-                                            f"sim:{metadata['similarity']:.3f}"
-                                        )
-                                    elif "distance" in metadata:
-                                        similarity_info = (
-                                            f"dist:{metadata['distance']:.3f}"
-                                        )
-                                logger.info(
-                                    f"🔍   Retrieved #{i + 1}: role={msg.get('role')}, {similarity_info}, content={msg.get('content', '')[:30]}..."
-                                )
-
-                except Exception as e:
-                    logger.warning(f"Failed to get total messages count after add: {e}")
-                    span.set_attribute("total_messages_after_add", -1)
+                # Add basic telemetry for storage success
+                span.set_attribute("conversation_stored", True)
 
                 logger.debug(
                     f"Stored conversation turn for user {user_id} in {venue_info.get('type', 'unknown')} venue"

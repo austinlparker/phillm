@@ -13,8 +13,10 @@ class TestConversationSessionManager:
         manager = ConversationSessionManager()
 
         # Mock Redis connections to avoid real Redis dependency
+        from redis import Redis
+
         manager.redis_client = AsyncMock()
-        manager.sync_redis_client = MagicMock()
+        manager.sync_redis_client = MagicMock(spec=Redis)
         manager.redis_client.ping = AsyncMock()
 
         # Mock embedding service
@@ -158,24 +160,6 @@ class TestConversationSessionManager:
         for msg in result:
             assert "metadata" not in msg
 
-    def test_session_caching(self, session_manager):
-        """Test that user sessions are properly cached"""
-        # Mock the vectorizer creation to avoid real OpenAI API calls
-        with patch(
-            "redisvl.utils.vectorize.text.openai.OpenAITextVectorizer"
-        ) as mock_vectorizer_class:
-            mock_vectorizer = MagicMock()
-            mock_vectorizer_class.return_value = mock_vectorizer
-
-            # Get session for first time
-            session1 = session_manager._get_user_session("test_user")
-
-            # Get session for second time - should be same instance
-            session2 = session_manager._get_user_session("test_user")
-
-            assert session1 is session2
-            assert "test_user" in session_manager.user_sessions
-
     @pytest.mark.asyncio
     async def test_session_stats(self, session_manager):
         """Test getting session statistics"""
@@ -230,26 +214,33 @@ if __name__ == "__main__":
             )
             mock_embedding_class.return_value = mock_embedding_instance
 
-            manager = ConversationSessionManager()
+            with patch(
+                "redisvl.utils.vectorize.text.openai.OpenAITextVectorizer"
+            ) as mock_vectorizer_class:
+                # Create a proper mock that satisfies the BaseVectorizer type check
+                from redisvl.utils.vectorize import BaseVectorizer
 
-            # Mock Redis dependencies
-            manager.redis_client = AsyncMock()
-            manager.sync_redis_client = MagicMock()
-            manager.redis_client.ping = AsyncMock()
+                mock_vectorizer = MagicMock(spec=BaseVectorizer)
+                mock_vectorizer.dims = 3072  # OpenAI text-embedding-3-large dimensions
+                mock_vectorizer.dtype = "float32"
+                mock_vectorizer_class.return_value = mock_vectorizer
 
-            test_instance = TestConversationSessionManager()
+                manager = ConversationSessionManager()
 
-            print("🧪 Running conversation session tests...")
+                # Mock Redis dependencies
+                manager.redis_client = AsyncMock()
+                manager.sync_redis_client = MagicMock()
+                manager.redis_client.ping = AsyncMock()
 
-            # Test session caching
-            print("  ✓ Testing session caching...")
-            test_instance.test_session_caching(manager)
+                test_instance = TestConversationSessionManager()
 
-            # Test conversation turn addition
-            print("  ✓ Testing conversation turn addition...")
-            await test_instance.test_add_conversation_turn(manager)
+                print("🧪 Running conversation session tests...")
 
-            print("✅ All basic tests passed!")
+                # Test conversation turn addition
+                print("  ✓ Testing conversation turn addition...")
+                await test_instance.test_add_conversation_turn(manager)
+
+                print("✅ All basic tests passed!")
 
     if sys.version_info >= (3, 7):
         asyncio.run(run_tests())

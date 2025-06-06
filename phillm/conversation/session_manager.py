@@ -158,36 +158,10 @@ class ConversationSessionManager:
                 span.set_attribute("session_key", session_key)
                 span.set_attribute("distance_threshold", self.distance_threshold)
 
-                # Get total messages in session first for debugging
-                try:
-                    all_messages = session.get_relevant(
-                        prompt="",  # Empty query to get all messages
-                        distance_threshold=1.0,  # Max threshold to get everything
-                        top_k=1000,  # Large limit
-                    )
-                    total_messages_in_session = len(all_messages)
-                    span.set_attribute(
-                        "total_messages_in_session", total_messages_in_session
-                    )
-                    span.set_attribute("session_exists", total_messages_in_session > 0)
-
-                    # Enhanced debugging for retrieval
-                    logger.info(
-                        f"🔍 RETRIEVAL DEBUG - User {user_id}, Query: '{current_query[:50]}...', Session has {total_messages_in_session} total messages"
-                    )
-                    if all_messages:
-                        logger.info("🔍 Sample stored messages:")
-                        for i, msg in enumerate(
-                            all_messages[-3:]
-                        ):  # Show last 3 messages
-                            logger.info(
-                                f"🔍   Stored #{i + 1}: role={msg.get('role')}, content='{msg.get('content', '')[:50]}...'"
-                            )
-
-                except Exception as e:
-                    logger.warning(f"Failed to get total messages count: {e}")
-                    span.set_attribute("total_messages_in_session", -1)
-                    span.set_attribute("session_exists", False)
+                # Skip total message count debug - causes OpenAI 400 errors with empty prompts
+                # Instead, we'll check after the main search
+                span.set_attribute("total_messages_in_session", -1)
+                span.set_attribute("session_exists", False)
 
                 # Get relevant messages based on semantic similarity
                 top_k = max_messages or self.max_context_messages
@@ -327,9 +301,10 @@ class ConversationSessionManager:
             await self._ensure_redis_connection()
             session = self._get_user_session(user_id)
 
-            # Get all messages to analyze
+            # Get all messages to analyze - use a dummy query instead of empty string
+            # to avoid OpenAI 400 errors with empty prompts
             all_messages = session.get_relevant(
-                prompt="",  # Empty query to get all messages
+                prompt="conversation",  # Non-empty query
                 distance_threshold=1.0,  # Max threshold to get everything
                 top_k=1000,  # Large limit
             )

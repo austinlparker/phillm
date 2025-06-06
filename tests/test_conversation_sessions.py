@@ -1,5 +1,6 @@
 import pytest
 import asyncio
+import unittest.mock
 from unittest.mock import AsyncMock, MagicMock, patch
 from phillm.conversation import ConversationSessionManager
 
@@ -57,8 +58,19 @@ class TestConversationSessionManager:
         assert "Hello, how are you?" in str(call_args)
         assert "I'm doing well, thanks!" in str(call_args)
 
-        # Verify get_relevant was called once for total messages count
-        mock_session.get_relevant.assert_called_once()
+        # Verify get_relevant was called (once for total messages count, once for immediate test)
+        assert mock_session.get_relevant.call_count == 2
+
+        # Verify the calls were made with correct parameters
+        calls = mock_session.get_relevant.call_args_list
+        # First call: get total messages count
+        assert calls[0] == unittest.mock.call(
+            prompt="", distance_threshold=1.0, top_k=1000
+        )
+        # Second call: immediate test retrieval
+        assert calls[1] == unittest.mock.call(
+            prompt="Hello, how are you?", distance_threshold=0.1, top_k=5
+        )
 
     @pytest.mark.asyncio
     async def test_get_relevant_conversation_context(self, session_manager):

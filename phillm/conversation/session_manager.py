@@ -170,7 +170,7 @@ class ConversationSessionManager:
                                             f"dist:{metadata['distance']:.3f}"
                                         )
                                 logger.info(
-                                    f"🔍   Retrieved #{i+1}: role={msg.get('role')}, {similarity_info}, content={msg.get('content', '')[:30]}..."
+                                    f"🔍   Retrieved #{i + 1}: role={msg.get('role')}, {similarity_info}, content={msg.get('content', '')[:30]}..."
                                 )
 
                 except Exception as e:
@@ -234,7 +234,7 @@ class ConversationSessionManager:
                             all_messages[-3:]
                         ):  # Show last 3 messages
                             logger.info(
-                                f"🔍   Stored #{i+1}: role={msg.get('role')}, content='{msg.get('content', '')[:50]}...'"
+                                f"🔍   Stored #{i + 1}: role={msg.get('role')}, content='{msg.get('content', '')[:50]}...'"
                             )
 
                 except Exception as e:
@@ -287,7 +287,7 @@ class ConversationSessionManager:
                                 score_info = f"dist:{distance:.3f}/sim:{score:.3f}"
 
                             logger.info(
-                                f"🔍   #{i+1}: {score_info}, role={msg.get('role')}, content='{msg.get('content', '')[:40]}...'"
+                                f"🔍   #{i + 1}: {score_info}, role={msg.get('role')}, content='{msg.get('content', '')[:40]}...'"
                             )
 
                     if similarity_scores:

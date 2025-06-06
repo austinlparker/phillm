@@ -10,7 +10,9 @@ class TestConversationSessionManager:
     @pytest.fixture
     def session_manager(self):
         """Create a conversation session manager for testing"""
-        manager = ConversationSessionManager()
+        # Mock the EmbeddingService initialization
+        with patch("phillm.conversation.session_manager.EmbeddingService"):
+            manager = ConversationSessionManager()
 
         # Mock Redis connections to avoid real Redis dependency
         from redis import Redis
@@ -32,6 +34,11 @@ class TestConversationSessionManager:
         """Test adding a conversation turn to the session"""
         # Mock the session
         mock_session = MagicMock()
+        # Mock get_relevant method for the total messages count call
+        mock_session.get_relevant.return_value = [
+            {"role": "user", "content": "Previous message 1"},
+            {"role": "assistant", "content": "Previous response 1"},
+        ]
         session_manager.user_sessions["test_user"] = mock_session
 
         venue_info = {"type": "dm", "channel_id": "D123456", "timestamp": 1234567890.0}
@@ -50,23 +57,39 @@ class TestConversationSessionManager:
         assert "Hello, how are you?" in str(call_args)
         assert "I'm doing well, thanks!" in str(call_args)
 
+        # Verify get_relevant was called once for total messages count
+        mock_session.get_relevant.assert_called_once()
+
     @pytest.mark.asyncio
     async def test_get_relevant_conversation_context(self, session_manager):
         """Test retrieving relevant conversation context"""
         # Mock the session and its get_relevant method
         mock_session = MagicMock()
-        mock_session.get_relevant.return_value = [
-            {
-                "role": "user",
-                "content": "Previous question about API",
-                "metadata": {"venue_type": "dm", "timestamp": 1234567890.0},
-            },
-            {
-                "role": "assistant",
-                "content": "Previous answer about API",
-                "metadata": {"venue_type": "dm", "timestamp": 1234567891.0},
-            },
-        ]
+
+        # Configure side_effect to return different values for different calls
+        def mock_get_relevant(prompt, distance_threshold, top_k):
+            if prompt == "":  # Call for total messages count
+                return [
+                    {"role": "user", "content": "Message 1"},
+                    {"role": "assistant", "content": "Response 1"},
+                    {"role": "user", "content": "Previous question about API"},
+                    {"role": "assistant", "content": "Previous answer about API"},
+                ]
+            else:  # Call for actual query
+                return [
+                    {
+                        "role": "user",
+                        "content": "Previous question about API",
+                        "metadata": {"venue_type": "dm", "timestamp": 1234567890.0},
+                    },
+                    {
+                        "role": "assistant",
+                        "content": "Previous answer about API",
+                        "metadata": {"venue_type": "dm", "timestamp": 1234567891.0},
+                    },
+                ]
+
+        mock_session.get_relevant.side_effect = mock_get_relevant
 
         session_manager.user_sessions["test_user"] = mock_session
 
@@ -78,10 +101,11 @@ class TestConversationSessionManager:
             venue_info=venue_info,
         )
 
-        # Verify get_relevant was called with correct parameters
-        mock_session.get_relevant.assert_called_once()
-        call_args = mock_session.get_relevant.call_args[1]
+        # Verify get_relevant was called twice (once for total count, once for actual query)
+        assert mock_session.get_relevant.call_count == 2
 
+        # Check the second call (actual query) parameters
+        call_args = mock_session.get_relevant.call_args[1]
         assert call_args["prompt"] == "Tell me more about the API"
         assert call_args["distance_threshold"] == 0.35
         assert call_args["top_k"] == 10

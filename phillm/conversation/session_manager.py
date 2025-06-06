@@ -114,6 +114,10 @@ class ConversationSessionManager:
                 await self._ensure_redis_connection()
                 session = self._get_user_session(user_id)
 
+                # Generate session key for debugging consistency
+                session_key = f"user_session_{user_id}"
+                span.set_attribute("session_key", session_key)
+
                 # Create metadata for both messages
                 timestamp = time.time()
                 base_metadata = {
@@ -127,6 +131,62 @@ class ConversationSessionManager:
                 session.store(
                     prompt=user_message, response=bot_response, metadata=base_metadata
                 )
+
+                # Get total messages after adding for debugging
+                try:
+                    all_messages_after = session.get_relevant(
+                        prompt="",  # Empty query to get all messages
+                        distance_threshold=1.0,  # Max threshold to get everything
+                        top_k=1000,  # Large limit
+                    )
+                    total_messages_after_add = len(all_messages_after)
+                    span.set_attribute(
+                        "total_messages_after_add", total_messages_after_add
+                    )
+
+                    # Log detailed storage verification
+                    logger.info(
+                        f"🔍 STORAGE VERIFICATION - User {user_id}: {total_messages_after_add} total messages after adding"
+                    )
+                    if all_messages_after:
+                        latest_msg = all_messages_after[-1]  # Get most recent
+                        logger.info(
+                            f"🔍 Latest stored message role: {latest_msg.get('role')}, content preview: {latest_msg.get('content', '')[:50]}..."
+                        )
+
+                        # Test immediate retrieval with the exact same user message
+                        test_retrieval = session.get_relevant(
+                            prompt=user_message,  # Use exact same message
+                            distance_threshold=0.1,  # Very lenient threshold
+                            top_k=5,
+                        )
+                        span.set_attribute(
+                            "immediate_test_retrieval_count", len(test_retrieval)
+                        )
+                        logger.info(
+                            f"🔍 IMMEDIATE TEST - Retrieved {len(test_retrieval)} messages for exact same query with 0.1 threshold"
+                        )
+
+                        if test_retrieval:
+                            for i, msg in enumerate(test_retrieval):
+                                similarity_info = "unknown"
+                                if isinstance(msg, dict) and "metadata" in msg:
+                                    metadata = msg["metadata"]
+                                    if "similarity" in metadata:
+                                        similarity_info = (
+                                            f"sim:{metadata['similarity']:.3f}"
+                                        )
+                                    elif "distance" in metadata:
+                                        similarity_info = (
+                                            f"dist:{metadata['distance']:.3f}"
+                                        )
+                                logger.info(
+                                    f"🔍   Retrieved #{i+1}: role={msg.get('role')}, {similarity_info}, content={msg.get('content', '')[:30]}..."
+                                )
+
+                except Exception as e:
+                    logger.warning(f"Failed to get total messages count after add: {e}")
+                    span.set_attribute("total_messages_after_add", -1)
 
                 logger.debug(
                     f"Stored conversation turn for user {user_id} in {venue_info.get('type', 'unknown')} venue"
@@ -157,13 +217,99 @@ class ConversationSessionManager:
                 await self._ensure_redis_connection()
                 session = self._get_user_session(user_id)
 
+                # Generate session key for debugging
+                session_key = f"user_session_{user_id}"
+                span.set_attribute("session_key", session_key)
+                span.set_attribute("distance_threshold", self.distance_threshold)
+
+                # Get total messages in session first for debugging
+                try:
+                    all_messages = session.get_relevant(
+                        prompt="",  # Empty query to get all messages
+                        distance_threshold=1.0,  # Max threshold to get everything
+                        top_k=1000,  # Large limit
+                    )
+                    total_messages_in_session = len(all_messages)
+                    span.set_attribute(
+                        "total_messages_in_session", total_messages_in_session
+                    )
+                    span.set_attribute("session_exists", total_messages_in_session > 0)
+
+                    # Enhanced debugging for retrieval
+                    logger.info(
+                        f"🔍 RETRIEVAL DEBUG - User {user_id}, Query: '{current_query[:50]}...', Session has {total_messages_in_session} total messages"
+                    )
+                    if all_messages:
+                        logger.info("🔍 Sample stored messages:")
+                        for i, msg in enumerate(
+                            all_messages[-3:]
+                        ):  # Show last 3 messages
+                            logger.info(
+                                f"🔍   Stored #{i+1}: role={msg.get('role')}, content='{msg.get('content', '')[:50]}...'"
+                            )
+
+                except Exception as e:
+                    logger.warning(f"Failed to get total messages count: {e}")
+                    span.set_attribute("total_messages_in_session", -1)
+                    span.set_attribute("session_exists", False)
+
                 # Get relevant messages based on semantic similarity
                 top_k = max_messages or self.max_context_messages
+                logger.info(
+                    f"🔍 SEMANTIC SEARCH - Searching for '{current_query[:50]}...' with threshold {self.distance_threshold}, top_k={top_k}"
+                )
+
                 relevant_messages = session.get_relevant(
                     prompt=current_query,
                     distance_threshold=self.distance_threshold,
                     top_k=top_k,
                 )
+
+                # Count messages found before distance filtering
+                span.set_attribute(
+                    "messages_found_before_distance_filter", len(relevant_messages)
+                )
+                logger.info(
+                    f"🔍 SEMANTIC SEARCH RESULT - Found {len(relevant_messages)} relevant messages"
+                )
+
+                # Find the closest similarity score for debugging
+                closest_similarity_score = 0.0
+                if relevant_messages:
+                    # SemanticMessageHistory includes similarity scores in the metadata
+                    similarity_scores = []
+                    logger.info(
+                        f"🔍 ANALYZING {len(relevant_messages)} relevant messages:"
+                    )
+                    for i, msg in enumerate(relevant_messages):
+                        # Check if the message has similarity metadata
+                        if isinstance(msg, dict) and "metadata" in msg:
+                            metadata = msg["metadata"]
+                            score_info = "no_score"
+                            if "similarity" in metadata:
+                                score = float(metadata["similarity"])
+                                similarity_scores.append(score)
+                                score_info = f"sim:{score:.3f}"
+                            elif "distance" in metadata:
+                                # Convert distance to similarity (assuming cosine distance)
+                                distance = float(metadata["distance"])
+                                score = 1.0 - distance
+                                similarity_scores.append(score)
+                                score_info = f"dist:{distance:.3f}/sim:{score:.3f}"
+
+                            logger.info(
+                                f"🔍   #{i+1}: {score_info}, role={msg.get('role')}, content='{msg.get('content', '')[:40]}...'"
+                            )
+
+                    if similarity_scores:
+                        closest_similarity_score = max(similarity_scores)
+                        logger.info(
+                            f"🔍 BEST SIMILARITY SCORE: {closest_similarity_score:.3f}"
+                        )
+                    else:
+                        logger.info("🔍 NO SIMILARITY SCORES FOUND in message metadata")
+
+                span.set_attribute("closest_similarity_score", closest_similarity_score)
 
                 # Filter for venue appropriateness if needed
                 filtered_messages = self._filter_for_venue_privacy(

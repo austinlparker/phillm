@@ -1,5 +1,7 @@
 import os
 import time
+from datetime import datetime
+from zoneinfo import ZoneInfo
 from typing import Optional, List, Dict, Any
 import openai
 from loguru import logger
@@ -180,6 +182,11 @@ class CompletionService:
 
         context_note = "DM conversation" if is_dm else "public channel conversation"
 
+        # Get current Pacific time
+        pacific_tz = ZoneInfo("America/Los_Angeles")
+        current_time = datetime.now(pacific_tz)
+        time_info = current_time.strftime("%A, %B %d, %Y at %I:%M %p PT")
+
         # Add requester name information (conversation context now handled via message history)
         requester_section = ""
         if requester_display_name:
@@ -217,6 +224,7 @@ Respond to messages using this style without altering the underlying topic.
 # Notes
 
 - This is a {context_note}
+- Current time: {time_info}
 - Use names naturally and sparingly - not in every response unless Phillip's style shows frequent name usage
 - Use the conversation history provided in the message thread to maintain context
 - Ensure responses maintain Phillip's style without shifting the conversation's topic

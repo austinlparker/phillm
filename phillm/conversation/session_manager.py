@@ -1,5 +1,4 @@
 import os
-import time
 from typing import List, Dict, Any, Optional
 from datetime import datetime
 from loguru import logger
@@ -118,19 +117,9 @@ class ConversationSessionManager:
                 session_key = f"user_session_{user_id}"
                 span.set_attribute("session_key", session_key)
 
-                # Create metadata for both messages
-                timestamp = time.time()
-                base_metadata = {
-                    "timestamp": timestamp,
-                    "venue_type": venue_info.get("type", "unknown"),
-                    "channel_id": venue_info.get("channel_id"),
-                    "user_id": user_id,
-                }
-
                 # Use the store method to add the conversation turn
-                session.store(
-                    prompt=user_message, response=bot_response, metadata=base_metadata
-                )
+                # Note: SemanticMessageHistory.store() doesn't accept metadata parameter
+                session.store(prompt=user_message, response=bot_response)
 
                 # Get total messages after adding for debugging
                 try:

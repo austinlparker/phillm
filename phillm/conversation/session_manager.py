@@ -3,7 +3,7 @@ import time
 from typing import List, Dict, Any, Optional
 from datetime import datetime
 from loguru import logger
-from redisvl.extensions.session_manager import SemanticSessionManager
+from redisvl.extensions.message_history import SemanticMessageHistory
 import redis.asyncio as redis
 from phillm.ai.embeddings import EmbeddingService
 from phillm.telemetry import get_tracer
@@ -22,7 +22,7 @@ class ConversationSessionManager:
         self.sync_redis_client = None
 
         # Cache of user sessions
-        self.user_sessions: Dict[str, SemanticSessionManager] = {}
+        self.user_sessions: Dict[str, SemanticMessageHistory] = {}
 
         # Session configuration
         self.distance_threshold = float(
@@ -70,7 +70,7 @@ class ConversationSessionManager:
 
         logger.info("✅ Redis connection established for conversation sessions")
 
-    def _get_user_session(self, user_id: str) -> SemanticSessionManager:
+    def _get_user_session(self, user_id: str) -> SemanticMessageHistory:
         """Get or create a semantic session for a user"""
         if user_id not in self.user_sessions:
             session_name = f"user_session_{user_id}"
@@ -79,7 +79,7 @@ class ConversationSessionManager:
             from redisvl.utils.vectorize.text.openai import OpenAITextVectorizer
 
             # Create session with OpenAI vectorizer to match our embedding service
-            session = SemanticSessionManager(
+            session = SemanticMessageHistory(
                 name=session_name,
                 redis_client=self.sync_redis_client,
                 distance_threshold=self.distance_threshold,
@@ -158,11 +158,11 @@ class ConversationSessionManager:
                 session = self._get_user_session(user_id)
 
                 # Get relevant messages based on semantic similarity
-                limit = max_messages or self.max_context_messages
+                top_k = max_messages or self.max_context_messages
                 relevant_messages = session.get_relevant(
-                    message=current_query,
+                    prompt=current_query,
                     distance_threshold=self.distance_threshold,
-                    limit=limit,
+                    top_k=top_k,
                 )
 
                 # Filter for venue appropriateness if needed
@@ -247,9 +247,9 @@ class ConversationSessionManager:
 
             # Get all messages to analyze
             all_messages = session.get_relevant(
-                message="",  # Empty query to get all messages
+                prompt="",  # Empty query to get all messages
                 distance_threshold=1.0,  # Max threshold to get everything
-                limit=1000,  # Large limit
+                top_k=1000,  # Large limit
             )
 
             stats: Dict[str, Any] = {

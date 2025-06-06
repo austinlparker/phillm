@@ -82,9 +82,9 @@ class TestConversationSessionManager:
         mock_session.get_relevant.assert_called_once()
         call_args = mock_session.get_relevant.call_args[1]
 
-        assert call_args["message"] == "Tell me more about the API"
+        assert call_args["prompt"] == "Tell me more about the API"
         assert call_args["distance_threshold"] == 0.35
-        assert call_args["limit"] == 10
+        assert call_args["top_k"] == 10
 
         # Verify results
         assert len(result) == 2

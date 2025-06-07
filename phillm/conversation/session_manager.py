@@ -78,6 +78,7 @@ class ConversationSessionManager:
             from redisvl.utils.vectorize.text.openai import OpenAITextVectorizer
 
             # Create session with OpenAI vectorizer to match our embedding service
+            # Use deterministic session_tag to ensure persistence across restarts
             session = SemanticMessageHistory(
                 name=session_name,
                 redis_client=self.sync_redis_client,
@@ -86,6 +87,7 @@ class ConversationSessionManager:
                     model="text-embedding-3-large",  # Match our embedding service
                     api_config={"api_key": os.getenv("OPENAI_API_KEY")},
                 ),
+                session_tag=f"persistent_{user_id}",  # Deterministic tag for persistence
             )
 
             self.user_sessions[user_id] = session

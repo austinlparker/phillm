@@ -23,9 +23,9 @@ class ConversationSessionManager:
         # Cache of user sessions
         self.user_sessions: Dict[str, SemanticMessageHistory] = {}
 
-        # Session configuration
+        # Session configuration - temporarily relaxed for debugging
         self.distance_threshold = float(
-            os.getenv("CONVERSATION_DISTANCE_THRESHOLD", "0.35")
+            os.getenv("CONVERSATION_DISTANCE_THRESHOLD", "0.8")  # Much more permissive
         )
         self.max_context_messages = int(os.getenv("MAX_CONTEXT_MESSAGES", "10"))
 

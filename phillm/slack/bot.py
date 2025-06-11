@@ -11,6 +11,7 @@ from phillm.ai.embeddings import EmbeddingService
 from phillm.ai.completions import CompletionService
 from phillm.conversation import ConversationSessionManager
 from phillm.user import UserManager
+from phillm.vector.redis_vector_store import RedisVectorStore
 from phillm.api.debug import update_stats, add_error
 from phillm.telemetry import get_tracer, telemetry
 
@@ -34,6 +35,9 @@ class SlackBot:
 
         # Initialize user manager
         self.user_manager = UserManager(self.app.client)
+
+        # Initialize vector store for RAG
+        self.vector_store = RedisVectorStore()
 
         self._setup_event_handlers()
 
@@ -385,19 +389,29 @@ class SlackBot:
         embedding_service = EmbeddingService()
         query_embedding = await embedding_service.create_embedding(query)
 
-        # Note: Style mimicking via vector similarity search has been removed
-        # as we're now using conversation sessions for context.
-        # The AI will rely on conversation history and system prompts for style.
-
         if not self.target_user_id:
             logger.error("Target user ID not configured")
             return "", []
 
-        # Use empty similar messages list - conversation context provides the style
-        similar_messages: List[Dict[str, Any]] = []
+        # Find similar historical messages for style examples via RAG
+        try:
+            similar_messages = await self.vector_store.find_similar_messages(
+                query,  # Pass the original query text, vector store will handle embedding
+                user_id=self.target_user_id,
+                limit=10,
+                threshold=0.5,  # Lower threshold to get more examples
+            )
+            logger.info(
+                f"🔍 Found {len(similar_messages)} similar historical messages for style reference"
+            )
+        except Exception as e:
+            logger.warning(
+                f"Failed to retrieve similar messages: {e}, proceeding without RAG"
+            )
+            similar_messages = []
 
         logger.info(
-            f"🔍 Generating response for query: {query[:50]}... using conversation context"
+            f"🔍 Generating response for query: {query[:50]}... using conversation context + {len(similar_messages)} style examples"
         )
 
         # Pass conversation history for context-aware responses

@@ -203,3 +203,37 @@ async def test_handle_mention_empty_message(slack_bot):
     # Should not process empty messages
     slack_bot.app.client.reactions_add.assert_not_called()
     say.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_handle_mention_in_thread(slack_bot):
+    """Test @ mention in a thread replies to the thread"""
+    body = {
+        "event": {
+            "user": "U456",
+            "channel": "C123",
+            "text": "<@UBOT> hello in thread",
+            "ts": "1234567890.456",
+            "thread_ts": "1234567890.123",  # This indicates it's in a thread
+        }
+    }
+    say = AsyncMock()
+
+    # Mock conversation session manager
+    slack_bot.conversation_sessions.get_conversation_history_for_prompt.return_value = []
+    slack_bot.user_manager.get_user_display_name.return_value = "Test User"
+    slack_bot._generate_ai_response = AsyncMock(
+        return_value=("Hi there in thread!", [0.1, 0.2])
+    )
+
+    with patch("phillm.slack.bot.update_stats"), patch("phillm.slack.bot.get_tracer"):
+        await slack_bot._handle_mention(body, say)
+
+    # Verify reactions and response with thread_ts
+    slack_bot.app.client.reactions_add.assert_called_with(
+        channel="C123", timestamp="1234567890.456", name="thinking_face"
+    )
+    say.assert_called_with("Hi there in thread!", thread_ts="1234567890.123")
+    slack_bot.app.client.reactions_remove.assert_called_with(
+        channel="C123", timestamp="1234567890.456", name="thinking_face"
+    )

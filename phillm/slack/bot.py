@@ -132,9 +132,12 @@ class SlackBot:
         message_text = event.get("text", "")
         user_id = event.get("user")
         channel_id = event.get("channel")
+        thread_ts = event.get(
+            "thread_ts"
+        )  # Get thread timestamp if this is in a thread
 
         logger.debug(
-            f"🎯 Mention Event - user_id: '{user_id}', channel_id: '{channel_id}', text: '{message_text[:50]}...'"
+            f"🎯 Mention Event - user_id: '{user_id}', channel_id: '{channel_id}', thread_ts: '{thread_ts}', text: '{message_text[:50]}...'"
         )
 
         # Skip empty messages
@@ -196,7 +199,13 @@ class SlackBot:
                 span.set_attribute("response.preview", response[:100])
 
                 # Send the response using say() for channel mentions
-                await say(response)
+                # If this mention is in a thread, reply in the thread
+                if thread_ts:
+                    await say(response, thread_ts=thread_ts)
+                    logger.debug(f"Replied in thread {thread_ts}")
+                else:
+                    await say(response)
+                    logger.debug("Replied in channel (not a thread)")
 
                 # Remove thinking reaction
                 await self.app.client.reactions_remove(

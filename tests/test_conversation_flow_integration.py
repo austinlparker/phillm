@@ -51,6 +51,53 @@ def test_completion_service_message_structure():
     print("✅ Message structure test passed!")
 
 
+def test_redisvl_llm_role_conversion():
+    """Test that conversation history with RedisVL 'llm' roles are converted to 'assistant'"""
+
+    # Simulate what ConversationSessionManager.get_conversation_history_for_prompt does
+    relevant_messages = [
+        {
+            "role": "user",
+            "content": "What's the weather like?",
+            "metadata": {"venue_type": "dm", "timestamp": 1234567890.0},
+        },
+        {
+            "role": "llm",  # RedisVL uses 'llm' for bot responses
+            "content": "I don't have real-time weather data.",
+            "metadata": {"venue_type": "dm", "timestamp": 1234567891.0},
+        },
+        {
+            "role": "user",
+            "content": "Tell me about APIs then.",
+            "metadata": {"venue_type": "dm", "timestamp": 1234567892.0},
+        },
+    ]
+
+    # Apply the role conversion logic from ConversationSessionManager
+    formatted_messages = []
+    for msg in relevant_messages:
+        # Convert RedisVL "llm" role to OpenAI-compatible "assistant" role
+        role = msg.get("role", "user")
+        if role == "llm":
+            role = "assistant"
+
+        # Only include role and content for the chat completion
+        formatted_messages.append({"role": role, "content": msg.get("content", "")})
+
+    # Verify conversion worked correctly
+    assert len(formatted_messages) == 3
+    assert formatted_messages[0]["role"] == "user"
+    assert formatted_messages[1]["role"] == "assistant"  # Converted from "llm"
+    assert formatted_messages[2]["role"] == "user"
+
+    # Verify all roles are valid for OpenAI
+    valid_roles = {"system", "user", "assistant"}
+    for msg in formatted_messages:
+        assert msg["role"] in valid_roles, f"Invalid role for OpenAI: {msg['role']}"
+
+    print("✅ RedisVL 'llm' role conversion test passed!")
+
+
 def test_system_prompt_changes():
     """Test that system prompt no longer includes conversation context"""
 
@@ -154,6 +201,7 @@ if __name__ == "__main__":
     print("🧪 Testing new conversation flow implementation...")
 
     test_completion_service_message_structure()
+    test_redisvl_llm_role_conversion()
     test_system_prompt_changes()
 
     # Run async test

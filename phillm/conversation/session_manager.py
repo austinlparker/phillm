@@ -280,10 +280,13 @@ class ConversationSessionManager:
         # Convert to OpenAI chat format
         formatted_messages = []
         for msg in relevant_messages:
+            # Convert RedisVL "llm" role to OpenAI-compatible "assistant" role
+            role = msg.get("role", "user")
+            if role == "llm":
+                role = "assistant"
+
             # Only include role and content for the chat completion
-            formatted_messages.append(
-                {"role": msg.get("role", "user"), "content": msg.get("content", "")}
-            )
+            formatted_messages.append({"role": role, "content": msg.get("content", "")})
 
         return formatted_messages
 

@@ -91,9 +91,9 @@ async def test_generate_ai_response(slack_bot):
         assert embedding == [0.1, 0.2, 0.3]
 
         # Verify services were called correctly
-        # create_embedding may be called 1-2 times depending on whether RAG succeeds or fails in test environment
+        # create_embedding may be called multiple times due to fallback strategy (1 initial + up to 4 fallback attempts)
         assert mock_embedding_service.create_embedding.call_count >= 1
-        assert mock_embedding_service.create_embedding.call_count <= 2
+        assert mock_embedding_service.create_embedding.call_count <= 5
         # First call should always be for the main query
         mock_embedding_service.create_embedding.assert_any_call(query)
         slack_bot.completion_service.generate_response.assert_called_once()

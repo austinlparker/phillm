@@ -393,22 +393,81 @@ class SlackBot:
             logger.error("Target user ID not configured")
             return "", []
 
-        # Find similar historical messages for style examples via RAG
-        try:
-            similar_messages = await self.vector_store.find_similar_messages(
-                query,  # Pass the original query text, vector store will handle embedding
-                user_id=self.target_user_id,
-                limit=10,
-                threshold=0.5,  # Lower threshold to get more examples
+        # Find similar historical messages for style examples via RAG with fallback strategy
+        similar_messages = []
+        style_threshold = float(os.getenv("STYLE_SIMILARITY_THRESHOLD", "0.3"))
+        fallback_thresholds = [style_threshold, 0.2, 0.1, 0.0]  # Progressive fallback
+
+        tracer = get_tracer()
+        with tracer.start_as_current_span("find_style_examples") as span:
+            span.set_attribute("style.threshold.configured", style_threshold)
+            span.set_attribute("style.fallback_attempts", len(fallback_thresholds))
+
+            successful_threshold = None
+            for attempt, threshold in enumerate(fallback_thresholds):
+                try:
+                    similar_messages = await self.vector_store.find_similar_messages(
+                        query,  # Pass the original query text, vector store will handle embedding
+                        user_id=self.target_user_id,
+                        limit=10,
+                        threshold=threshold,
+                    )
+
+                    # Log best similarity score if we have results
+                    if similar_messages:
+                        best_similarity = max(
+                            msg.get("similarity", 0) for msg in similar_messages
+                        )
+                        span.set_attribute(
+                            f"style.attempt_{attempt}.threshold", threshold
+                        )
+                        span.set_attribute(
+                            f"style.attempt_{attempt}.results_count",
+                            len(similar_messages),
+                        )
+                        span.set_attribute(
+                            f"style.attempt_{attempt}.best_similarity", best_similarity
+                        )
+
+                        successful_threshold = threshold
+                        if attempt > 0:
+                            logger.warning(
+                                f"🔄 Fallback successful: Found {len(similar_messages)} examples at threshold {threshold} (attempt {attempt + 1}), best similarity: {best_similarity:.3f}"
+                            )
+                        else:
+                            logger.info(
+                                f"🔍 Found {len(similar_messages)} similar historical messages for style reference (threshold: {threshold}), best similarity: {best_similarity:.3f}"
+                            )
+                        break
+                    else:
+                        span.set_attribute(
+                            f"style.attempt_{attempt}.threshold", threshold
+                        )
+                        span.set_attribute(f"style.attempt_{attempt}.results_count", 0)
+                        if attempt < len(fallback_thresholds) - 1:
+                            logger.debug(
+                                f"❌ No examples found at threshold {threshold}, trying fallback..."
+                            )
+                except Exception as e:
+                    span.set_attribute(f"style.attempt_{attempt}.error", str(e))
+                    logger.warning(
+                        f"Failed to retrieve similar messages at threshold {threshold}: {e}"
+                    )
+                    if attempt == len(fallback_thresholds) - 1:
+                        logger.warning(
+                            "All fallback attempts failed, proceeding without style examples"
+                        )
+                        similar_messages = []
+
+            # Final telemetry
+            span.set_attribute("style.final_threshold", successful_threshold or -1)
+            span.set_attribute("style.final_results_count", len(similar_messages))
+            span.set_attribute(
+                "style.fallback_used",
+                successful_threshold != style_threshold
+                if successful_threshold
+                else False,
             )
-            logger.info(
-                f"🔍 Found {len(similar_messages)} similar historical messages for style reference"
-            )
-        except Exception as e:
-            logger.warning(
-                f"Failed to retrieve similar messages: {e}, proceeding without RAG"
-            )
-            similar_messages = []
 
         logger.info(
             f"🔍 Generating response for query: {query[:50]}... using conversation context + {len(similar_messages)} style examples"

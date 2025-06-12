@@ -156,3 +156,27 @@ resource "aws_ssm_parameter" "max_response_tokens" {
     Application = var.project_name
   }
 }
+
+resource "aws_ssm_parameter" "style_similarity_threshold" {
+  name      = "/${var.project_name}/style_similarity_threshold"
+  type      = "String"
+  value     = var.style_similarity_threshold
+  overwrite = true
+
+  tags = {
+    Environment = var.environment
+    Application = var.project_name
+  }
+}
+
+resource "aws_ssm_parameter" "conversation_distance_threshold" {
+  name      = "/${var.project_name}/conversation_distance_threshold"
+  type      = "String"
+  value     = var.conversation_distance_threshold
+  overwrite = true
+
+  tags = {
+    Environment = var.environment
+    Application = var.project_name
+  }
+}

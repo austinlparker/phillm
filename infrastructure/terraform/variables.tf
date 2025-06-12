@@ -126,3 +126,15 @@ variable "scrape_channels" {
   type        = string
   default     = ""
 }
+
+variable "style_similarity_threshold" {
+  description = "Similarity threshold for style transfer examples (0.0-1.0)"
+  type        = string
+  default     = "0.3"
+}
+
+variable "conversation_distance_threshold" {
+  description = "Distance threshold for conversation context retrieval (0.0-1.0)"
+  type        = string
+  default     = "0.8"
+}

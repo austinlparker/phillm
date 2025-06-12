@@ -483,6 +483,14 @@ resource "aws_ecs_task_definition" "phillm" {
         {
           name      = "MAX_RESPONSE_TOKENS"
           valueFrom = aws_ssm_parameter.max_response_tokens.arn
+        },
+        {
+          name      = "STYLE_SIMILARITY_THRESHOLD"
+          valueFrom = aws_ssm_parameter.style_similarity_threshold.arn
+        },
+        {
+          name      = "CONVERSATION_DISTANCE_THRESHOLD"
+          valueFrom = aws_ssm_parameter.conversation_distance_threshold.arn
         }
       ]
 
